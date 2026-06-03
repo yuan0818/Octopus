@@ -1,0 +1,26 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot'
+    id 'io.spring.dependency-management'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+dependencies {
+    // ── Infra modules ──────────────────────────────────────────
+    implementation platform(project(':octopus-infra:infra-bom'))
+    implementation project(':octopus-infra:infra-common')
+    implementation project(':octopus-infra:infra-jgit')
+
+    // ── Spring Boot ─────────────────────────────────────────────
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    // ── Core dependencies ───────────────────────────────────────
+    implementation 'org.eclipse.jgit:org.eclipse.jgit'
+    implementation 'org.eclipse.jgit:org.eclipse.jgit.ssh.apache'
+}

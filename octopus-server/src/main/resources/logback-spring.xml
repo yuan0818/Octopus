@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- Spring Boot's default patterns (CONSOLE_LOG_PATTERN, FILE_LOG_PATTERN, etc.) -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <!-- Override LOG_PATH with system property or env var, default to ./logs -->
+    <property name="LOG_PATH" value="${LOG_PATH:-logs}"/>
+    <property name="APP_NAME" value="octopus-server"/>
+
+    <!--
+        Common file pattern — includes MDC taskId so logs from a single analysis
+        task can be correlated with: grep 'task=42' logs/octopus-server-analysis.log
+    -->
+    <property name="FILE_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] [task=%X{taskId:-?}] %logger{50} - %msg%n"/>
+
+    <!-- ── Console ──────────────────────────────────────────────────── -->
+    <!--
+        ThresholdFilter(INFO) prevents DEBUG events from io.yuan.octopus (which have
+        level DEBUG on their own logger) leaking here via additivity propagation.
+    -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>INFO</level>
+        </filter>
+        <encoder>
+            <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- ── All-logs rolling file: INFO+ for everything ──────────────── -->
+    <appender name="FILE_ALL" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_PATH}/${APP_NAME}.log</file>
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>INFO</level>
+        </filter>
+        <encoder>
+            <pattern>${FILE_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_PATH}/archived/${APP_NAME}-%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>1GB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <appender name="ASYNC_FILE_ALL" class="ch.qos.logback.classic.AsyncAppender">
+        <!-- discardingThreshold=0: never silently drop log events when queue is full -->
+        <discardingThreshold>0</discardingThreshold>
+        <queueSize>512</queueSize>
+        <appender-ref ref="FILE_ALL"/>
+    </appender>
+
+    <!-- ── Analysis pipeline log: DEBUG+ for io.yuan.octopus only ───── -->
+    <!--
+        This file captures the full analysis trace at DEBUG level:
+          - PSI connection retries and fallbacks
+          - Per-project parse steps
+          - Call graph build progress
+          - Git detection and branch resolution
+        Use this to diagnose why endpoints are wrong or PSI fell back to JavaParser.
+    -->
+    <appender name="FILE_ANALYSIS" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_PATH}/${APP_NAME}-analysis.log</file>
+        <encoder>
+            <pattern>${FILE_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_PATH}/archived/${APP_NAME}-analysis-%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>100MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>2GB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <appender name="ASYNC_FILE_ANALYSIS" class="ch.qos.logback.classic.AsyncAppender">
+        <discardingThreshold>0</discardingThreshold>
+        <queueSize>512</queueSize>
+        <appender-ref ref="FILE_ANALYSIS"/>
+    </appender>
+
+    <!-- ── Logger configuration ─────────────────────────────────────── -->
+
+    <!--
+        Our application code:
+          - Level DEBUG  → captures full pipeline trace in FILE_ANALYSIS
+          - additivity=true → INFO+ also propagates to root (console + FILE_ALL)
+          - The ThresholdFilter(INFO) on root appenders prevents DEBUG from leaking there
+    -->
+    <logger name="io.yuan.octopus" level="DEBUG" additivity="true">
+        <appender-ref ref="ASYNC_FILE_ANALYSIS"/>
+    </logger>
+
+    <!-- Suppress verbose third-party noise -->
+    <logger name="org.springframework"         level="INFO"/>
+    <logger name="org.hibernate"               level="WARN"/>
+    <logger name="com.zaxxer.hikari"           level="WARN"/>
+    <logger name="org.neo4j.driver"            level="WARN"/>
+    <logger name="org.eclipse.jgit"            level="INFO"/>
+    <logger name="com.github.javaparser"       level="WARN"/>
+
+    <!-- ── Root: INFO → console + all-log file ──────────────────────── -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_FILE_ALL"/>
+    </root>
+
+</configuration>

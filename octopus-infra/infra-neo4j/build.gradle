@@ -1,0 +1,21 @@
+plugins {
+    id 'java-library'
+}
+
+description = 'octopus-infra-neo4j — Neo4j Driver configuration'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation platform(project(':octopus-infra:infra-bom'))
+    api 'org.neo4j.driver:neo4j-java-driver'
+    api 'org.springframework.boot:spring-boot-starter:3.4.0'
+}

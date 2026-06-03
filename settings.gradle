@@ -1,0 +1,11 @@
+rootProject.name = 'octopus'
+
+include 'octopus-server'
+include 'octopus-psi'
+include 'octopus-git'
+include 'octopus-infra:infra-bom'
+include 'octopus-infra:infra-common'
+include 'octopus-infra:infra-neo4j'
+include 'octopus-infra:infra-mysql'
+include 'octopus-infra:infra-jgit'
+include 'octopus-code-reconstruct'

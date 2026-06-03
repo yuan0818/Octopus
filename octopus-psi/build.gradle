@@ -1,0 +1,87 @@
+plugins {
+    id 'java'
+    id 'org.jetbrains.intellij.platform' version '2.5.0'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+    intellijPlatform {
+        defaultRepositories()
+    }
+}
+
+// Resolve IntelliJ IDEA installation path.
+// Priority:
+//   1. IDEA_HOME environment variable (can point to any platform's IDE)
+//   2. /Applications/IntelliJ IDEA.app (macOS)
+//   3. Gradle-managed download (IC 2024.3)
+def isLinux = System.properties['os.name'].toLowerCase().contains('linux')
+def localIdeaDir = null
+
+def envIdeaHome = System.getenv('IDEA_HOME')
+if (envIdeaHome != null && !envIdeaHome.isBlank()) {
+    localIdeaDir = file(envIdeaHome)
+    logger.lifecycle("[octopus-psi] Using IDEA_HOME: ${localIdeaDir}")
+} else if (!isLinux) {
+    // macOS: check default installation path
+    def macIdea = file("/Applications/IntelliJ IDEA.app")
+    if (macIdea.exists()) {
+        localIdeaDir = macIdea
+        logger.lifecycle("[octopus-psi] Using macOS IntelliJ IDEA: ${localIdeaDir}")
+    }
+}
+// On Linux the Dockerfile.psi copies IDEA into /opt/idea, which runIde uses directly.
+// No local fallback is needed on Linux — the Gradle plugin downloads IC 2024.3.
+
+intellijPlatform {
+    pluginConfiguration {
+        changeNotes = ''
+        ideaVersion {
+            sinceBuild = '243.21565'
+            untilBuild = ''
+        }
+    }
+}
+
+    dependencies {
+        intellijPlatform {
+            if (localIdeaDir != null && localIdeaDir.exists()) {
+                logger.lifecycle("[octopus-psi] Using local IDEA installation: ${localIdeaDir}")
+                local(localIdeaDir)
+            } else {
+                logger.lifecycle("[octopus-psi] Downloading IDEA IC 2024.3 for ${System.properties['os.name']} via Gradle")
+                create('IC', '2024.3')
+            }
+        bundledPlugins(['com.intellij.java', 'com.intellij.properties', 'org.jetbrains.kotlin'])
+    }
+
+    implementation platform(project(':octopus-infra:infra-bom'))
+    implementation project(':octopus-infra:infra-common')
+    implementation 'com.google.code.gson:gson'
+}
+
+tasks.named('runIde') {
+    enabled = true
+    jvmArgs = [
+        '-Xms256m',
+        '-Xmx4g',
+        '-XX:ReservedCodeCacheSize=512m',
+        '-Didea.headless.mode=true',
+        '-Didea.no.platform.update=true',
+        '-Djb.privacy.policy.text=<!-- 999.999 -->',
+        '-Djb.consents.confirmation.enabled=false',
+        '-Didea.trust.all.projects=true',
+    ]
+    def port = project.findProperty('octopus.psi.port') ?: '8377'
+    args = ['analyze', 'serve', '--port', port]
+}
+
+tasks.named('buildSearchableOptions') {
+    enabled = false
+}

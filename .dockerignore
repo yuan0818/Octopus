@@ -1,0 +1,7 @@
+node_modules/
+.gradle/
+build/
+.git/
+*.log
+.DS_Store
+octpus-frontend/node_modules/

@@ -1,0 +1,22 @@
+plugins {
+    id 'java-library'
+}
+
+description = 'octopus-infra-common — shared utility classes'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation platform(project(':octopus-infra:infra-bom'))
+    // Minimal Spring Boot starter for @Component, @Value etc.
+    api 'org.springframework.boot:spring-boot-starter:3.4.0'
+    api 'com.google.code.gson:gson'
+}

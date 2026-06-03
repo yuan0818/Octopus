@@ -1,0 +1,2 @@
+// Parent project for octopus-infra submodules.
+// Each submodule defines its own build.gradle.

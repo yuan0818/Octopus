@@ -1,0 +1,21 @@
+plugins {
+    id 'java'
+}
+
+description = 'octopus-infra-mysql — MySQL/JPA infrastructure (audit callback)'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation platform(project(':octopus-infra:infra-bom'))
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa:3.4.0'
+    runtimeOnly 'com.mysql:mysql-connector-j'
+}

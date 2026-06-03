@@ -1,0 +1,21 @@
+plugins {
+    id 'java-library'
+}
+
+description = 'octopus-infra-jgit — JGit operations abstraction'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation platform(project(':octopus-infra:infra-bom'))
+    api 'org.eclipse.jgit:org.eclipse.jgit'
+    api 'org.eclipse.jgit:org.eclipse.jgit.ssh.apache'
+}

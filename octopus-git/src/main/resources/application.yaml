@@ -1,0 +1,14 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: octopus-git
+
+octopus:
+  git:
+    local-repo-base: /data/repos
+    shallow-clone: true
+    local-repo-ttl-days: 30
+    local-repo-max-count: 50
+    local-repo-max-size-gb: 100

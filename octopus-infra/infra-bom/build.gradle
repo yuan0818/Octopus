@@ -1,0 +1,19 @@
+plugins {
+    id 'java-platform'
+}
+
+javaPlatform {
+    allowDependencies()
+}
+
+// Unified middleware version management.
+// Business modules should NOT declare these versions directly.
+dependencies {
+    constraints {
+        api 'org.neo4j.driver:neo4j-java-driver:5.27.0'
+        api 'org.eclipse.jgit:org.eclipse.jgit:7.6.0.202603022253-r'
+        api 'org.eclipse.jgit:org.eclipse.jgit.ssh.apache:7.6.0.202603022253-r'
+        api 'com.google.code.gson:gson:2.11.0'
+        api 'com.github.javaparser:javaparser-symbol-solver-core:3.26.4'
+    }
+}
