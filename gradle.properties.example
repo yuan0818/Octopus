@@ -1,0 +1,14 @@
+# ── IntelliJ IDEA installation path ────────────────────────────────────
+# Required for the jvm-project-analyzer (PSI) module.
+# Uncomment and set to your local IntelliJ IDEA installation path.
+# Priority: -PideaHome=... > IDEA_HOME env var > this file > auto-download
+#
+# macOS example:
+#ideaHome=/Applications/IntelliJ IDEA.app
+#
+# Linux example:
+#ideaHome=/opt/idea/IC-2025.3
+#
+# Platform type (IU = Ultimate, IC = Community)
+#platformType=IU
+#platformVersion=2025.3

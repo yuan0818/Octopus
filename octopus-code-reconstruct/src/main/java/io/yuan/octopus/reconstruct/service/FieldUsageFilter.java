@@ -36,7 +36,7 @@ public class FieldUsageFilter {
 
     private boolean isReferenced(FieldEntry field, String source) {
         // Constants always retain
-        String mod = field.modifiers() != null ? field.modifiers() : "";
+        String mod = field.modifiers() != null ? field.modifiers().replace(",", " ").replaceAll("\\s+", " ") : "";
         if (mod.contains("static final") || mod.contains("final static")) {
             return true;
         }

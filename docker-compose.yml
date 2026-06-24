@@ -1,0 +1,29 @@
+services:
+
+  git:
+    build:
+      context: .
+      dockerfile: Dockerfile.git
+    container_name: octopus-git
+    ports:
+      - "8081:8081"
+    volumes:
+      - ~/workspace:/workspace:ro
+      - git-repos:/data/repos
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: octopus-frontend
+    ports:
+      - "3000:3000"
+
+volumes:
+  git-repos:

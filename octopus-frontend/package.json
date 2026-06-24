@@ -12,6 +12,7 @@
   "dependencies": {
     "@ant-design/icons": "^5.5.0",
     "@ant-design/pro-components": "^2.8.0",
+    "@ant-design/v5-patch-for-react-19": "^1.0.3",
     "@dagrejs/dagre": "^3.0.0",
     "@types/dagre": "^0.7.54",
     "@xyflow/react": "^12.10.2",

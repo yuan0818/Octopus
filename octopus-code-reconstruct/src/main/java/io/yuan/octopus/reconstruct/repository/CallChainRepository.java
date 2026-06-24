@@ -22,15 +22,16 @@ public class CallChainRepository {
     }
 
     /** Fetch the full signature for a known class + method. */
-    public String findSignature(String className, String methodName) {
+    public String findSignature(Long projectId, String className, String methodName) {
         try (Session session = neo4jDriver.session()) {
             Result result = session.run(
                 "MATCH (m:MethodNode) " +
-                "WHERE m.qualifiedClassName = $className " +
+                "WHERE m.projectId = $projectId " +
+                "  AND m.qualifiedClassName = $className " +
                 "  AND m.methodName = $methodName " +
                 "  AND coalesce(m.current, true) = true " +
                 "RETURN m.signature AS sig LIMIT 1",
-                Map.of("className", className, "methodName", methodName));
+                Map.of("projectId", projectId, "className", className, "methodName", methodName));
             if (result.hasNext()) {
                 return result.next().get("sig").asString();
             }
@@ -39,10 +40,11 @@ public class CallChainRepository {
     }
 
     /** Return all direct callees for a given caller, excluding SPRING_DI edges. */
-    public List<CalleeRow> findDirectCallees(String className, String methodName) {
+    public List<CalleeRow> findDirectCallees(Long projectId, String className, String methodName) {
         String cypher =
             "MATCH (caller:MethodNode)-[c:CALLS]->(callee:MethodNode) " +
-            "WHERE caller.qualifiedClassName = $className " +
+            "WHERE caller.projectId = $projectId " +
+            "  AND caller.qualifiedClassName = $className " +
             "  AND caller.methodName = $methodName " +
             "  AND coalesce(caller.current, true) = true " +
             "  AND coalesce(callee.current, true) = true " +
@@ -52,7 +54,33 @@ public class CallChainRepository {
             "                callee.signature AS sig";
         List<CalleeRow> results = new ArrayList<>();
         try (Session session = neo4jDriver.session()) {
-            Result result = session.run(cypher, Map.of("className", className, "methodName", methodName));
+            Result result = session.run(cypher, Map.of("projectId", projectId, "className", className, "methodName", methodName));
+            while (result.hasNext()) {
+                var record = result.next();
+                results.add(new CalleeRow(
+                    record.get("cls").asString(),
+                    record.get("method").asString(),
+                    record.get("sig").asString()));
+            }
+        }
+        return results;
+    }
+
+    /** Return all direct callers for a given callee (reverse direction). */
+    public List<CalleeRow> findDirectCallers(Long projectId, String className, String methodName) {
+        String cypher =
+            "MATCH (caller:MethodNode)-[c:CALLS]->(callee:MethodNode) " +
+            "WHERE callee.projectId = $projectId " +
+            "  AND callee.qualifiedClassName = $className " +
+            "  AND callee.methodName = $methodName " +
+            "  AND coalesce(caller.current, true) = true " +
+            "  AND coalesce(callee.current, true) = true " +
+            "RETURN DISTINCT caller.qualifiedClassName AS cls, " +
+            "                caller.methodName AS method, " +
+            "                caller.signature AS sig";
+        List<CalleeRow> results = new ArrayList<>();
+        try (Session session = neo4jDriver.session()) {
+            Result result = session.run(cypher, Map.of("projectId", projectId, "className", className, "methodName", methodName));
             while (result.hasNext()) {
                 var record = result.next();
                 results.add(new CalleeRow(

@@ -1,0 +1,9 @@
+FROM nginx:alpine
+COPY octopus-frontend/dist /usr/share/nginx/html
+# nginx.conf uses ${API_HOST} which is substituted at startup via envsubst.
+# Default: API runs locally on host → host.docker.internal:8080
+COPY nginx.conf /etc/nginx/templates/default.conf.template
+EXPOSE 3000
+# envsubst replaces ${API_HOST} and nginx-docker's entrypoint runs envsubst automatically
+# when templates are placed in /etc/nginx/templates/
+ENV API_HOST=host.docker.internal:8080

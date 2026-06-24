@@ -1,0 +1,18 @@
+<idea-plugin>
+    <id>io.yuan.octopus.psi</id>
+    <name>Octopus PSI Analyzer</name>
+    <vendor>yuan.io</vendor>
+
+    <description>
+        Headless IntelliJ-based analyzer for Octopus.
+        Extracts Spring-aware call graphs and metadata from Java projects
+        and exports results as JSON for consumption by the Octopus main service.
+    </description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.java</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <appStarter id="analyze" implementation="io.yuan.octopus.psi.PsiAnalyzerMain"/>
+    </extensions>
+</idea-plugin>

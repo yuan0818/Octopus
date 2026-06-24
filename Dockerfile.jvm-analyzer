@@ -1,0 +1,42 @@
+# linux/arm64 IntelliJ PSI analyzer container.
+# Downloads IDEA IC 2025.3 during Docker build.
+# Set IDEA_HOME env var at runtime to point to /opt/idea if needed.
+FROM --platform=linux/arm64 eclipse-temurin:21-jdk
+
+# Xvfb is required even in "headless" mode:
+# IntelliJ Platform 2025.3 needs AWT to initialise a GraphicsEnvironment at boot.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates unzip fontconfig libfreetype6 \
+    xvfb libxtst6 libxi6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Download IntelliJ IDEA IC 2025.3 (arm64) — ~750 MB.
+# The version pin matches the Gradle IntelliJ plugin declaration in jvm-project-analyzer/build.gradle.
+RUN curl -fsSL "https://download.jetbrains.com/idea/ideaIC-2025.3-aarch64.tar.gz" \
+    -o /tmp/idea.tar.gz \
+    && mkdir -p /opt/idea \
+    && tar xzf /tmp/idea.tar.gz --strip-components=1 -C /opt/idea \
+    && rm /tmp/idea.tar.gz \
+    && echo 'idea.headless.mode=true' >> /opt/idea/bin/idea.properties \
+    && echo 'idea.no.platform.update=true' >> /opt/idea/bin/idea.properties \
+    && echo '-Djb.privacy.policy.text=<!-- 999.999 -->' >> /opt/idea/bin/idea64.vmoptions \
+    && echo '-Djb.consents.confirmation.enabled=false' >> /opt/idea/bin/idea64.vmoptions
+
+# Copy plugin distribution ZIP
+COPY jvm-project-analyzer/build/distributions/jvm-project-analyzer-*.zip /tmp/plugin.zip
+RUN unzip /tmp/plugin.zip -d /opt/idea/plugins/ && rm /tmp/plugin.zip
+
+RUN mkdir -p /opt/sandbox/config /opt/sandbox/system /workspace
+
+# Entrypoint: Xvfb + headless IDEA
+RUN printf '#!/bin/sh\n\
+Xvfb :99 -screen 0 1280x1024x24 -ac &\n\
+XVFB_PID=$!\nsleep 1\n\
+export DISPLAY=:99\n\
+export JAVA_TOOL_OPTIONS="-Didea.headless.mode=true -Didea.no.platform.update=true -Didea.config.path=/opt/sandbox/config -Didea.system.path=/opt/sandbox/system ${JAVA_TOOL_OPTIONS}"\n\
+exec /opt/idea/bin/idea.sh "$@"\n' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+EXPOSE 8377
+ENV IDEA_PROPERTIES=/opt/idea/bin/idea.properties
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["analyze", "serve", "--port", "8377"]

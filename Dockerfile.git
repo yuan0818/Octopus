@@ -1,0 +1,8 @@
+FROM eclipse-temurin:21-jre
+WORKDIR /opt/octopus-git
+
+COPY octopus-git/build/libs/octopus-git-*.jar /opt/octopus-git/octopus-git.jar
+
+EXPOSE 8081
+
+ENTRYPOINT ["java", "-jar", "/opt/octopus-git/octopus-git.jar"]

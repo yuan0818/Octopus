@@ -1,0 +1,51 @@
+# Optional overlay: run ALL services inside Docker (JVM Analyzer + API + frontend).
+#
+# Usage (all services in Docker):
+#   docker compose -f docker-compose.yml -f docker-compose.jvm-analyzer.yml up
+#
+# Default (docker-compose.yml only):
+#   JVM Analyzer + API run locally; only git + frontend run in Docker.
+services:
+  jvm-analyzer:
+    build:
+      context: .
+      dockerfile: Dockerfile.jvm-analyzer
+    container_name: jvm-project-analyzer
+    ports:
+      - "8377:8377"
+    volumes:
+      - ~/workspace:/workspace:ro
+    environment:
+      - JAVA_TOOL_OPTIONS=-Xms512m -Xmx4g
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8377/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 120
+      start_period: 1200s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: octopus-api
+    ports:
+      - "8080:8080"
+    volumes:
+      - ~/workspace:/workspace:ro
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-root}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-octopus123}
+      - OCTOPUS_PSI_HOST_WORKSPACE_ROOT=${HOME}/workspace
+    depends_on:
+      git:
+        condition: service_healthy
+      jvm-analyzer:
+        condition: service_healthy
+
+  frontend:
+    environment:
+      - API_HOST=api:8080
+    depends_on:
+      - api

@@ -1,7 +1,8 @@
 import http from './client';
+import reconstructHttp from './reconstructClient';
 import type {
-  CallEdge, CallChainResult, CallTraceDTO, ClassDetail, ClassSummary, EndpointDiffPaths,
-  EndpointInfo, ImpactPaths, MethodEdgeDTO, ProjectInfo, SourcePath,
+  CallChainResult, CallTraceDTO, ClassDetail, ClassSummary, EndpointDiffPaths,
+  EndpointInfo, EntryPointInfo, ImpactPaths, MethodEdgeDTO, ProjectInfo, SourcePath,
 } from '../types';
 
 export const queryApi = {
@@ -46,6 +47,20 @@ export const queryApi = {
       params: projectId != null ? { projectId } : {},
     }),
 
+  entryPoints: (projectId?: number, type?: string) =>
+    http.get<EntryPointInfo[]>('/query/entry-points', {
+      params: {
+        ...(projectId != null ? { projectId } : {}),
+        ...(type ? { type } : {}),
+      },
+    }),
+
   projects: () =>
     http.get<ProjectInfo[]>('/query/projects'),
+
+  /** Reverse chain: find all API endpoints that reach a given method */
+  reverseChain: (projectId: number, className: string, methodName: string, strategy = 'BFS') =>
+    reconstructHttp.get('/reverse-chain', {
+      params: { projectId, className, methodName, strategy },
+    }),
 };

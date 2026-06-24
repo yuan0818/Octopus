@@ -1,0 +1,92 @@
+plugins {
+    id 'java'
+    id 'org.jetbrains.intellij.platform' version '2.5.0'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+    compileJava {
+        options.compilerArgs << '-Xlint:deprecation' << '-Xlint:unchecked'
+    }
+}
+
+repositories {
+    mavenCentral()
+    intellijPlatform {
+        defaultRepositories()
+    }
+}
+
+// ── Platform selection ─────────────────────────────────────────────────────
+// Default platform: IU 2025.3 (build 253).
+//   - Verified for compatibility with IDEA 2025.3.6.
+//   - The sinceBuild is kept at 243 so the plugin also loads on 2024.3+
+//     installations.
+//   - The local IDEA (IDEA 2.app) is 2025.3 — matches the default.
+//   - IDEA 2026.1 is NOT supported: it ships with JBR 25 (incompatible with
+//     runIde), and Kotlin PSI is deeply embedded in the platform, making it
+//     unresolvable from the plugin classloader.
+//
+// Override via:
+//   ./gradlew :jvm-project-analyzer:buildPlugin -PplatformType=IC -PplatformVersion=2024.3
+//
+// IDEA installation path (avoids downloading):
+//   1. Gradle property:  -PideaHome=/Applications/IntelliJ\ IDEA\ 2.app
+//   2. Environment var:  export IDEA_HOME=/Applications/IntelliJ\ IDEA\ 2.app
+//   3. gradle.properties: ideaHome=/Applications/IntelliJ IDEA 2.app
+//   If none set, IDEA is downloaded automatically.
+def platformType = project.findProperty('platformType') ?: 'IU'
+def platformVersion = project.findProperty('platformVersion') ?: '2025.3'
+
+def ideaHomeProp = project.findProperty('ideaHome') as String ?: System.getenv('IDEA_HOME')
+def localIdeaDir = ideaHomeProp ? new File(ideaHomeProp) : null
+
+intellijPlatform {
+    pluginConfiguration {
+        changeNotes = ''
+        ideaVersion {
+            sinceBuild = '243.21565'
+            untilBuild = ''
+        }
+    }
+}
+
+    dependencies {
+        intellijPlatform {
+            if (localIdeaDir != null && localIdeaDir.exists()) {
+                logger.lifecycle("[jvm-project-analyzer] Using local IDEA installation: ${localIdeaDir}")
+                local(localIdeaDir)
+            } else {
+                logger.lifecycle("[jvm-project-analyzer] Downloading IDEA ${platformType} ${platformVersion} for ${System.properties['os.name']} via Gradle")
+                create(platformType, platformVersion)
+            }
+            bundledPlugins(['com.intellij.java', 'com.intellij.properties', 'org.jetbrains.kotlin'])
+    }
+
+    implementation platform(project(':octopus-infra:infra-bom'))
+    implementation project(':octopus-infra:infra-common')
+    implementation 'com.google.code.gson:gson'
+
+}
+
+tasks.named('runIde') {
+    enabled = true
+    jvmArgs = [
+        '-Xms256m',
+        '-Xmx4g',
+        '-XX:ReservedCodeCacheSize=512m',
+        '-Didea.headless.mode=true',
+        '-Didea.no.platform.update=true',
+        '-Djb.privacy.policy.text=<!-- 999.999 -->',
+        '-Djb.consents.confirmation.enabled=false',
+        '-Didea.trust.all.projects=true',
+    ]
+    def port = project.findProperty('octopus.psi.port') ?: '8377'
+    args = ['analyze', 'serve', '--port', port]
+}
+
+tasks.named('buildSearchableOptions') {
+    enabled = false
+}

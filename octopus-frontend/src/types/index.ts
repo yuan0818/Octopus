@@ -197,6 +197,25 @@ export interface EndpointInfo {
   commitId: string | null;
 }
 
+export type EntryPointType = 'HTTP_API' | 'SCHEDULED' | 'MESSAGE_LISTENER' | 'ROOT_METHOD';
+
+export interface EntryPointInfo {
+  entryType: EntryPointType | string;
+  displayName: string;
+  triggerLabel: string | null;
+  httpMethod: string | null;
+  path: string | null;
+  methodName: string;
+  qualifiedClassName: string;
+  ownerSimpleName: string | null;
+  controllerSimpleName: string | null;
+  signature: string;
+  projectId: number | null;
+  projectName: string | null;
+  branch: string | null;
+  commitId: string | null;
+}
+
 /** Method node enriched with edge metadata (callType + lineNumber). */
 export interface MethodEdgeDTO {
   qualifiedClassName: string;
@@ -214,6 +233,74 @@ export interface CallTraceDTO {
   anchor: MethodNodeInfo;
   upstream: MethodEdgeDTO[];
   downstream: MethodEdgeDTO[];
+}
+
+// ── Review Agent ──
+export interface RequirementItem {
+  id: string;
+  title: string;
+  description: string;
+}
+
+export interface LLMConfig {
+  provider: string;
+  model: string;
+  maxTokens: number;
+  temperature: number;
+}
+
+export interface ReviewRequest {
+  projectId: number;
+  className: string;
+  methodName: string;
+  strategy?: string;
+  requirements?: RequirementItem[];
+  docPath?: string;
+  reviewMode?: 'REQUIREMENT_AWARE' | 'RISK_BASED';
+  mode?: 'SYNC' | 'ASYNC';
+  skillId?: string;
+  modelName?: string;
+  llmConfig?: LLMConfig;
+}
+
+export interface ReviewSummary {
+  totalRequirements: number;
+  passed: number;
+  failed: number;
+  uncertain: number;
+  highestSeverity: string;
+}
+
+export interface RequirementCheck {
+  requirementId: string;
+  requirementTitle: string;
+  passed: boolean;
+  confidence: string;
+  detail: string;
+  codeReferences: string[];
+  highlightedCode: string | null;
+  suggestion: string | null;
+}
+
+export interface CodeIssue {
+  severity: string;
+  category: string;
+  description: string;
+  codeReferences: string[];
+  highlightedCode: string | null;
+  suggestion: string | null;
+}
+
+export interface ReviewResponse {
+  sessionId: string;
+  anchor: string;
+  reviewMode?: 'REQUIREMENT_AWARE' | 'RISK_BASED';
+  summary: ReviewSummary;
+  requirementChecks: RequirementCheck[];
+  issues: CodeIssue[];
+  involvedClasses: number;
+  totalMethods: number;
+  truncated: boolean;
 }
 
 export interface ProjectInfo {

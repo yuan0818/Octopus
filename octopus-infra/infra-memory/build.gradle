@@ -1,0 +1,29 @@
+plugins {
+    id 'java-library'
+}
+
+description = 'octopus-infra-memory — cross-service memory storage (project knowledge, review findings)'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation platform(project(':octopus-infra:infra-bom'))
+
+    api project(':octopus-infra:infra-common')
+    api 'org.springframework.boot:spring-boot-starter-data-jpa:3.4.0'
+    runtimeOnly 'com.mysql:mysql-connector-j:8.2.0'
+
+    // Test
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testImplementation 'org.mockito:mockito-core:5.12.0'
+    testImplementation 'org.mockito:mockito-junit-jupiter:5.12.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+}

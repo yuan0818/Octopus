@@ -9,6 +9,7 @@ import javax.sql.DataSource;
 import java.sql.*;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.regex.Pattern;
 
 /**
  * Assembles a complete Java source file for a class using stored MySQL metadata,
@@ -44,20 +45,20 @@ public class ClassSourceAssembler {
      * @param involvedSigs   set of method signatures that are in the call chain
      * @return assembled Java source code, or null if the class is not found
      */
-    public AssembledClass assemble(String qualifiedName, Set<String> involvedSigs) {
+    public AssembledClass assemble(Long projectId, String qualifiedName, Set<String> involvedSigs) {
         try {
-            // 1. Load class info
-            ClassInfoRow cls = loadClassInfo(qualifiedName);
+            // 1. Load class info (scoped to project)
+            ClassInfoRow cls = loadClassInfo(projectId, qualifiedName);
             if (cls == null) return null;
 
             // 2. Load annotations
             List<AnnotationRow> classAnnotations = loadAnnotations("CLASS", cls.id());
 
-            // 3. Load methods (filtered to involvedSigs)
+            // 3. Load methods (filtered to involvedSigs; null = include all)
             List<MethodRow> allMethods = loadMethods(cls.id());
-            List<MethodRow> involvedMethods = allMethods.stream()
-                .filter(m -> involvedSigs.contains(m.signature()))
-                .toList();
+            List<MethodRow> involvedMethods = involvedSigs != null
+                ? allMethods.stream().filter(m -> signatureMatch(m.signature(), involvedSigs)).toList()
+                : allMethods;
 
             if (involvedMethods.isEmpty() && !qualifiedName.equals(cls.qualifiedName())) {
                 // No methods used from this class — skip unless it's the anchor
@@ -77,8 +78,13 @@ public class ClassSourceAssembler {
                         loadFieldAnnotationParams(cls.id(), f.fieldName())))
                 .toList();
 
-            // 5. Collect imports from dependencies referenced in involved methods
-            Set<String> imports = collectImportDependencies(cls.id(), involvedMethods);
+            // 5. Collect imports from dependencies referenced in methods + fields.
+            //    Use allMethods when involved is empty (anchor class signature mismatch).
+            List<MethodRow> importMethods = involvedMethods.isEmpty() ? allMethods : involvedMethods;
+            String preferredPackage = cls.qualifiedName().contains(".")
+                ? cls.qualifiedName().substring(0, cls.qualifiedName().lastIndexOf('.'))
+                : "";
+            Set<String> imports = collectImportDependencies(cls.id(), importMethods, usedFields, projectId, preferredPackage);
 
             // 6. Load parent class and interfaces
             List<String> parentClasses = loadParentClasses(cls.id());
@@ -132,11 +138,17 @@ public class ClassSourceAssembler {
         }
 
         // Class declaration
+        String ct = cls.classType() != null ? cls.classType() : "CLASS";
         sb.append("public ");
-        if (cls.classType() != null && !cls.classType().equals("CLASS")) {
-            sb.append(cls.classType().toLowerCase()).append(" ");
+        if (!"CLASS".equals(ct)) {
+            sb.append(ct.toLowerCase()).append(" ");
+        } else {
+            sb.append("class ");
         }
-        sb.append("class ").append(cls.simpleName());
+        sb.append(cls.simpleName());
+        // For interfaces: "implements" doesn't make sense — use "extends"
+        // For classes: use "extends"
+        // For enums/records: handled above
 
         if (!parentClasses.isEmpty()) {
             sb.append(" extends ");
@@ -147,10 +159,24 @@ public class ClassSourceAssembler {
             }
         }
         if (!interfaces.isEmpty()) {
-            sb.append(" implements ");
-            sb.append(interfaces.stream()
-                .map(i -> i.contains(".") ? i.substring(i.lastIndexOf('.') + 1) : i)
-                .collect(Collectors.joining(", ")));
+            boolean isInterface = !"CLASS".equals(ct);
+            sb.append(isInterface ? " extends " : " implements ");
+            String rendered = interfaces.stream()
+                .map(i -> {
+                    String simple = i.contains(".") ? i.substring(i.lastIndexOf('.') + 1) : i;
+                    // For MyBatis-Plus mappers (XxxMapper extends BaseMapper<Entity>),
+                    // derive the entity type from the mapper name by stripping the "Mapper" suffix.
+                    // e.g. TutorialMapper → BaseMapper<Tutorial>
+                    if ("BaseMapper".equals(simple) && cls.simpleName().endsWith("Mapper")) {
+                        String entity = cls.simpleName().substring(0, cls.simpleName().length() - 6); // strip "Mapper"
+                        if (!entity.isEmpty()) {
+                            return "BaseMapper<" + entity + ">";
+                        }
+                    }
+                    return simple;
+                })
+                .collect(Collectors.joining(", "));
+            sb.append(rendered);
         }
         sb.append(" {\n\n");
 
@@ -161,7 +187,7 @@ public class ClassSourceAssembler {
             }
             sb.append("    ");
             if (field.modifiers() != null && !field.modifiers().isBlank()) {
-                sb.append(field.modifiers()).append(" ");
+                sb.append(normalizeModifiers(field.modifiers())).append(" ");
             }
             sb.append(field.fieldType()).append(" ").append(field.fieldName()).append(";\n\n");
         }
@@ -169,20 +195,20 @@ public class ClassSourceAssembler {
 
         // Methods
         for (MethodRow method : involvedMethods) {
-            // Method annotations
-            List<AnnotationRow> methodAnnotations = loadMethodAnnotationsSync(cls.id(), method.signature());
-            for (AnnotationRow ann : methodAnnotations) {
-                sb.append("    ").append(formatAnnotation(ann)).append("\n");
-            }
-            // Method source code (already includes signature + body)
             String source = method.sourceCode();
             if (source != null) {
-                // Indent each line
+                // Source code already includes annotations, signature, and body.
+                // Indent each line.
                 String[] lines = source.split("\n");
                 for (String line : lines) {
                     sb.append("    ").append(line).append("\n");
                 }
             } else {
+                // No source code — render annotations from DB as fallback
+                List<AnnotationRow> methodAnnotations = loadMethodAnnotationsSync(cls.id(), method.signature());
+                for (AnnotationRow ann : methodAnnotations) {
+                    sb.append("    ").append(formatAnnotation(ann)).append("\n");
+                }
                 sb.append("    // source not available\n");
             }
             sb.append("\n");
@@ -190,6 +216,13 @@ public class ClassSourceAssembler {
 
         sb.append("}\n");
         return sb.toString();
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    private static String normalizeModifiers(String modifiers) {
+        if (modifiers == null) return "";
+        return modifiers.replace(", ", " ").replace(",", " ").replaceAll("\\s+", " ").trim();
     }
 
     // ── Database Queries ────────────────────────────────────────────
@@ -204,12 +237,13 @@ public class ClassSourceAssembler {
     private record AnnotationRow(String annotationName, String annotationParams,
                                   String targetType, Long targetId) {}
 
-    private ClassInfoRow loadClassInfo(String qualifiedName) throws SQLException {
+    private ClassInfoRow loadClassInfo(Long projectId, String qualifiedName) throws SQLException {
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(
                 "SELECT id, qualified_name, simple_name, class_type, modifiers, source_file_path " +
-                "FROM class_info WHERE qualified_name = ? LIMIT 1")) {
-            ps.setString(1, qualifiedName);
+                "FROM class_info WHERE project_id = ? AND qualified_name = ? LIMIT 1")) {
+            ps.setLong(1, projectId);
+            ps.setString(2, qualifiedName);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     return new ClassInfoRow(
@@ -293,11 +327,30 @@ public class ClassSourceAssembler {
     }
 
     private String loadFieldAnnotationParams(Long classId, String fieldName) {
-        // annotation_info stores field annotations with target_type='FIELD'
-        // But we don't have a direct field_info.id -> annotation_info.target_id mapping here.
-        // For simplicity, check if @Autowired or @Resource is likely present
-        // by looking at the field type (starts with I or is an interface)
-        return fieldName.startsWith("I") ? "Autowired" : null;
+        // Query annotation_info for FIELD-level annotations on this field.
+        // Need to join through field_info to get field_info.id for the target_id.
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                "SELECT ai.annotation_name, ai.annotation_params " +
+                "FROM annotation_info ai " +
+                "JOIN field_info fi ON ai.target_id = fi.id AND ai.target_type = 'FIELD' " +
+                "WHERE fi.class_id = ? AND fi.field_name = ?")) {
+            ps.setLong(1, classId);
+            ps.setString(2, fieldName);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    String name = rs.getString("annotation_name");
+                    String params = rs.getString("annotation_params");
+                    if (params != null && !params.isBlank() && !"{}".equals(params)) {
+                        return name + ":" + params;
+                    }
+                    return name;
+                }
+            }
+        } catch (SQLException e) {
+            log.warn("Failed to load field annotation for {}.{}: {}", classId, fieldName, e.getMessage());
+        }
+        return null;
     }
 
     private List<String> loadParentClasses(Long classId) throws SQLException {
@@ -343,10 +396,12 @@ public class ClassSourceAssembler {
         return ifaces;
     }
 
-    private Set<String> collectImportDependencies(Long classId, List<MethodRow> methods) {
+    private Set<String> collectImportDependencies(Long classId, List<MethodRow> methods,
+                                                    List<FieldEntry> fields, Long projectId,
+                                                    String preferredPackage) {
         Set<String> imports = new LinkedHashSet<>();
 
-        // Collect from class_dependency
+        // 1. Collect from class_dependency table (resolved by JavaParser)
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(
                 "SELECT dependency_qualified_name FROM class_dependency " +
@@ -361,24 +416,125 @@ public class ClassSourceAssembler {
             log.debug("Failed to load imports: {}", e.getMessage());
         }
 
-        // Also collect from method source code — extract type references
-        Set<String> sourceRefs = new LinkedHashSet<>();
-        for (MethodRow m : methods) {
-            if (m.sourceCode() != null) {
-                // Extract simple class names from source code
-                java.util.regex.Pattern classPattern =
-                    java.util.regex.Pattern.compile("\\b([A-Z][a-zA-Z0-9_]+)\\b");
-                java.util.regex.Matcher mat = classPattern.matcher(m.sourceCode());
-                while (mat.find()) {
-                    String name = mat.group(1);
-                    if (!isJavaLangClass(name) && !name.equals(m.methodName())) {
-                        sourceRefs.add(name);
+        // 2. Resolve field types to FQN via class_info
+        //    JavaParser may not have stored field-type dependencies, so we
+        //    search class_info across ALL projects for matching simple names.
+        imports.addAll(resolveSimpleNamesToFqn(fields.stream().map(FieldEntry::fieldType).toList(), "field", preferredPackage));
+
+        // 3. Resolve method return types and parameter types
+        //    Types like "Result<TutorialResp>" are used in method signatures
+        //    but may not be in class_dependency. Extract simple class names
+        //    from return_type and parameter_types columns.
+        List<String> methodTypes = methods.stream()
+            .flatMap(m -> {
+                List<String> types = new ArrayList<>();
+                if (m.returnType() != null) types.add(m.returnType());
+                if (m.parameterTypes() != null) {
+                    // parameterTypes is JSON-like or comma-separated: "String,String,Result<TutorialResp>"
+                    for (String pt : m.parameterTypes().split("[,;]")) {
+                        pt = pt.trim().replaceAll("[\\[\\]\"{}]", "");
+                        if (!pt.isEmpty()) types.add(pt);
+                    }
+                }
+                return types.stream();
+            })
+            .toList();
+        imports.addAll(resolveSimpleNamesToFqn(methodTypes, "method", preferredPackage));
+
+        return imports;
+    }
+
+    /** Extract simple names and FQN from type strings, resolve to class_info FQN. */
+    private Set<String> resolveSimpleNamesToFqn(List<String> typeStrings, String context,
+                                                  String preferredPackage) {
+        Set<String> lookups = new LinkedHashSet<>();
+        for (String raw : typeStrings) {
+            if (raw == null || raw.isBlank()) continue;
+            // Handle generic: "Result<TutorialResp>" or "com.result.Result<TutorialResp>"
+            String base = raw.contains("<") ? raw.substring(0, raw.indexOf('<')) : raw;
+            if (!base.contains(".") && Character.isUpperCase(base.charAt(0)) && !isJavaLangClass(base)) {
+                lookups.add(base); // simple name → search via LIKE
+            } else if (base.contains(".") && !base.startsWith("java.")
+                    && !base.startsWith("jakarta.") && !base.startsWith("org.springframework")) {
+                lookups.add(base); // already FQN → direct match
+            }
+            // Also extract generic parameters
+            if (raw.contains("<") && raw.contains(">")) {
+                String inner = raw.substring(raw.indexOf('<') + 1, raw.lastIndexOf('>'));
+                for (String part : inner.split(",")) {
+                    part = part.trim();
+                    if (part.contains(".")) {
+                        lookups.add(part);
+                    } else if (!part.isEmpty() && Character.isUpperCase(part.charAt(0)) && !isJavaLangClass(part)) {
+                        lookups.add(part);
                     }
                 }
             }
         }
+        if (lookups.isEmpty()) return Set.of();
 
-        return imports;
+        // Build WHERE clause: FQN uses =, simple names use LIKE
+        List<String> fqns = lookups.stream().filter(n -> n.contains(".")).toList();
+        List<String> simples = lookups.stream().filter(n -> !n.contains(".")).toList();
+        List<String> clauses = new ArrayList<>();
+        List<String> params = new ArrayList<>();
+        for (String f : fqns) { clauses.add("qualified_name = ?"); params.add(f); }
+        for (String s : simples) { clauses.add("qualified_name LIKE ?"); params.add("%." + s); }
+        if (clauses.isEmpty()) return Set.of();
+
+        Set<String> result = new LinkedHashSet<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                "SELECT DISTINCT qualified_name FROM class_info WHERE "
+                + String.join(" OR ", clauses))) {
+            for (int i = 0; i < params.size(); i++) {
+                ps.setString(i + 1, params.get(i));
+            }
+            // For simple-name lookups (e.g. "TutorialService"), multiple projects may match.
+            // Disambiguate by preferring the one with the longest common package prefix
+            // to the anchor class (e.g. prefer device-server over management-server
+            // when anchor is in com.nothing.watch.device.server).
+            Map<String, List<String>> simpleToFqns = new LinkedHashMap<>();
+            for (String s : simples) {
+                simpleToFqns.put(s, new ArrayList<>());
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String qn = rs.getString("qualified_name");
+                    result.add(qn);
+                    // Track per-simple-name matches for disambiguation
+                    for (String s : simples) {
+                        if (qn.endsWith("." + s) || qn.equals(s)) {
+                            simpleToFqns.computeIfAbsent(s, k -> new ArrayList<>()).add(qn);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Disambiguate: if multiple FQN match the same simple name, keep only the
+            // one that shares the longest common package prefix with preferredPackage.
+            if (preferredPackage != null && !preferredPackage.isEmpty()) {
+                List<String> toRemove = new ArrayList<>();
+                for (String s : simples) {
+                    List<String> candidates = simpleToFqns.get(s);
+                    if (candidates != null && candidates.size() > 1) {
+                        // Find best match by shared prefix length
+                        String best = candidates.stream()
+                            .max(java.util.Comparator.comparingInt(
+                                c -> commonPrefixLength(c, preferredPackage)))
+                            .orElse(candidates.get(0));
+                        for (String c : candidates) {
+                            if (!c.equals(best)) toRemove.add(c);
+                        }
+                    }
+                }
+                result.removeAll(toRemove);
+            }
+        } catch (SQLException e) {
+            log.debug("Failed to resolve {} types: {}", context, e.getMessage());
+        }
+        return result;
     }
 
     // ── Formatting Helpers ─────────────────────────────────────────
@@ -389,15 +545,117 @@ public class ClassSourceAssembler {
             return "@" + ann.annotationName();
         }
         // annotationParams is stored as JSON-like string, e.g., {"value":"\"/api\""}
-        // Convert to Java annotation syntax
-        String params = ann.annotationParams()
+        // Convert to Java annotation syntax like @RequestMapping("/api") or @RequestMapping(value = "/api")
+        String raw = ann.annotationParams()
             .replaceAll("\\\\\"", "\"")   // unescape inner quotes
-            .replaceAll("^\\{|\\}$", ""); // remove braces
-        return "@" + ann.annotationName() + "(" + params + ")";
+            .trim();
+
+        String javaParams;
+        if (raw.startsWith("{") && raw.endsWith("}")) {
+            // Parse JSON-like object: {"name":"value","flag":true}
+            String inner = raw.substring(1, raw.length() - 1).trim();
+            if (inner.isEmpty() || inner.equals("{}")) {
+                return "@" + ann.annotationName();
+            }
+            // Split by comma at top level (not inside strings)
+            List<String> pairs = splitAnnotationPairs(inner);
+            if (pairs.size() == 1 && pairs.get(0).startsWith("\"value\":")) {
+                // Single value: strip the "value": wrapper
+                String val = pairs.get(0).substring(8).trim(); // after "value":
+                javaParams = unquoteJsonValue(val);
+            } else {
+                // Multiple or non-value keys: convert each to key = value
+                javaParams = pairs.stream()
+                    .map(p -> {
+                        int colon = p.indexOf(':');
+                        if (colon < 0) return p.trim();
+                        String key = unquoteJsonValue(p.substring(0, colon));
+                        String val = unquoteJsonValue(p.substring(colon + 1));
+                        return key + " = " + val;
+                    })
+                    .collect(Collectors.joining(", "));
+            }
+        } else if (raw.startsWith("\"") && raw.endsWith("\"")) {
+            // Just a quoted string value
+            javaParams = raw.substring(1, raw.length() - 1);
+        } else {
+            javaParams = raw;
+        }
+
+        return "@" + ann.annotationName() + "(" + javaParams + ")";
+    }
+
+    /** Split JSON key:value pairs at the top level (not inside nested strings/objects). */
+    private List<String> splitAnnotationPairs(String inner) {
+        List<String> pairs = new ArrayList<>();
+        int depth = 0;
+        int start = 0;
+        boolean inString = false;
+        for (int i = 0; i < inner.length(); i++) {
+            char c = inner.charAt(i);
+            if (c == '"' && (i == 0 || inner.charAt(i - 1) != '\\')) inString = !inString;
+            if (inString) continue;
+            if (c == '{' || c == '[') depth++;
+            if (c == '}' || c == ']') depth--;
+            if (c == ',' && depth == 0) {
+                pairs.add(inner.substring(start, i).trim());
+                start = i + 1;
+            }
+        }
+        if (start < inner.length()) {
+            pairs.add(inner.substring(start).trim());
+        }
+        return pairs;
+    }
+
+    /** Remove surrounding quotes from a JSON value. */
+    private String unquoteJsonValue(String s) {
+        s = s.trim();
+        if (s.startsWith("\"") && s.endsWith("\"")) {
+            return s.substring(1, s.length() - 1);
+        }
+        return s;
     }
 
     private String formatFieldAnnotation(FieldEntry field) {
-        return "@Autowired";
+        String raw = field.annotationParams();
+        if (raw == null || raw.isBlank()) return null;
+        // Format: "Resource" or "Autowired:{\"name\":\"myBean\"}"
+        if (raw.contains(":")) {
+            int colon = raw.indexOf(':');
+            String name = raw.substring(0, colon);
+            String params = raw.substring(colon + 1);
+            if (params != null && !params.isBlank() && !"{}".equals(params)) {
+                String formatted = formatAnnotation(
+                    new AnnotationRow(name, params, null, null));
+                // formatAnnotation already returns "@Name(...)" — remove leading @
+                return formatted.startsWith("@") ? formatted : "@" + formatted;
+            }
+            return "@" + name;
+        }
+        return "@" + raw;
+    }
+
+    /**
+     * Match a MySQL short-name signature against a set of chain (FQN) signatures.
+     * Normalizes both sides by stripping package prefixes from parameter types
+     * before comparison, so that {@code getTutorial(String,String):Result}
+     * matches {@code getTutorial(java.lang.String,java.lang.String):com...Result}.
+     */
+    private boolean signatureMatch(String mysqlSig, Set<String> chainSigs) {
+        // Exact match
+        if (chainSigs.contains(mysqlSig)) return true;
+        // Normalized match: strip spaces so "String,String" == "String, String"
+        String normalized = mysqlSig.replace(" ", "");
+        return chainSigs.stream().anyMatch(s -> s.replace(" ", "").equals(normalized));
+    }
+
+    /** Count chars in common prefix between two dotted package/class names. */
+    private int commonPrefixLength(String a, String b) {
+        int min = Math.min(a.length(), b.length());
+        int i = 0;
+        while (i < min && a.charAt(i) == b.charAt(i)) i++;
+        return i;
     }
 
     private String derivePackageName(String qualifiedName) {
