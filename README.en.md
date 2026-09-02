@@ -323,6 +323,7 @@ docker compose -f docker-compose.yml -f docker-compose.jvm-analyzer.yml up -d
 | `GIT_PASSWORD` | — | Git server authentication password |
 | `OCTOPUS_ENCRYPTION_KEY` | — | AES-GCM key (Git credentials + review-agent model API keys at rest; must stay stable — rotating makes stored ciphertext undecryptable) |
 | `OCTOPUS_GO_ROUTER_PKGS` | built-in default | Go router framework package whitelist (comma-separated, framework profile) |
+| `OCTOPUS_REPO_ROOT` | `/data/repos` | Repository storage root — shared at the same path by every repo-reading service (git/PSI/Go/reconstruct; single writer = GitService, others read-only); point it at a writable dir on macOS |
 | `QUERY_SERVICE_URL` | `http://localhost:8080` | review-agent → code-intelligence base URL (change summary fetches chain diff) |
 
 ---

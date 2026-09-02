@@ -46,6 +46,10 @@ public class PSIExecutor {
     private final long timeoutSeconds;
     private final String psiServiceUrl;
     private final String hostWorkspaceRoot;
+    /** 仓库存储根（容器侧路径，OCTOPUS_REPO_ROOT），与 hostRepoRoot 配对翻译。 */
+    private final String repoBase;
+    /** 仓库存储根在分析服务侧的实际路径；与 repoBase 一致（同径挂载）时置空禁用翻译。 */
+    private final String hostRepoRoot;
     private final int connectRetryAttempts;
     private final long connectRetryIntervalSeconds;
     private final HttpClient httpClient;
@@ -54,12 +58,16 @@ public class PSIExecutor {
                        @Value("${octopus.psi.timeout-seconds:600}") long timeoutSeconds,
                        @Value("${octopus.psi.service-url:}") String psiServiceUrl,
                        @Value("${octopus.psi.host-workspace-root:}") String hostWorkspaceRoot,
+                       @Value("${octopus.git.local-repo-base:/data/repos}") String repoBase,
+                       @Value("${octopus.psi.host-repo-root:}") String hostRepoRoot,
                        @Value("${octopus.psi.connect-retry-attempts:5}") int connectRetryAttempts,
                        @Value("${octopus.psi.connect-retry-interval-seconds:15}") long connectRetryIntervalSeconds) {
         this.psiJarPath = psiJarPath;
         this.timeoutSeconds = timeoutSeconds;
         this.psiServiceUrl = psiServiceUrl;
         this.hostWorkspaceRoot = hostWorkspaceRoot;
+        this.hostRepoRoot = hostRepoRoot;
+        this.repoBase = repoBase;
         this.connectRetryAttempts = connectRetryAttempts;
         this.connectRetryIntervalSeconds = connectRetryIntervalSeconds;
         this.httpClient = HttpClient.newBuilder()

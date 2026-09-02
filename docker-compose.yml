@@ -9,7 +9,8 @@ services:
       - "8081:8081"
     volumes:
       - ~/workspace:/workspace:ro
-      - git-repos:/data/repos
+      # 仓库存储根：同径挂载（容器内外同一路径），所有服务共享同一网络卷
+      - ${OCTOPUS_REPO_ROOT:-/data/repos}:${OCTOPUS_REPO_ROOT:-/data/repos}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
       interval: 10s
@@ -25,5 +26,3 @@ services:
     ports:
       - "3000:3000"
 
-volumes:
-  git-repos:

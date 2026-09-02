@@ -6,7 +6,9 @@ spring:
     host: localhost:29418
     username: octopus
     password: ${GIT_PASSWORD}
-    local-repo-base: /data/repos
+    # 仓库存储根：所有需要读仓库文件的服务（git/reconstruct/PSI/Go）统一用
+    # OCTOPUS_REPO_ROOT，同一路径语义（单一写者=GitService，其余只读）
+    local-repo-base: ${OCTOPUS_REPO_ROOT:/data/repos}
 
   datasource:
     url: jdbc:mysql://localhost:3306/octopus?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC

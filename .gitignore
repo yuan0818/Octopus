@@ -54,3 +54,11 @@ logs/
 /data/
 /logs/
 /node_modules/
+
+### Agent 工具产物 ###
+.zcode/
+.claude/
+
+### 运行日志（任意层级）###
+**/logs/
+*.log

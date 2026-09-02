@@ -320,6 +320,7 @@ docker compose -f docker-compose.yml -f docker-compose.jvm-analyzer.yml up -d
 | `GIT_PASSWORD` | — | Git 服务器认证密码 |
 | `OCTOPUS_ENCRYPTION_KEY` | — | AES-GCM 加密密钥（Git 凭据 + review-agent 的模型 API Key 静态加密；需保持稳定，更换后已存密文无法解密） |
 | `OCTOPUS_GO_ROUTER_PKGS` | 内置默认 | Go 路由框架包白名单（逗号分隔，框架画像） |
+| `OCTOPUS_REPO_ROOT` | `/data/repos` | 仓库存储根——所有读仓库的服务（git/PSI/Go/reconstruct）统一同径挂载（单一写者=GitService，其余只读）；macOS 本地建议指向可写目录 |
 | `QUERY_SERVICE_URL` | `http://localhost:8080` | review-agent 访问 code-intelligence 的地址（变更总结取链路 diff） |
 
 ---

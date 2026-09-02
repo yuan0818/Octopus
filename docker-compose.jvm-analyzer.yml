@@ -15,6 +15,7 @@ services:
       - "8377:8377"
     volumes:
       - ~/workspace:/workspace:ro
+      - ${OCTOPUS_REPO_ROOT:-/data/repos}:${OCTOPUS_REPO_ROOT:-/data/repos}:ro
     environment:
       - JAVA_TOOL_OPTIONS=-Xms512m -Xmx4g
     healthcheck:
@@ -33,11 +34,14 @@ services:
       - "8080:8080"
     volumes:
       - ~/workspace:/workspace:ro
+      - ${OCTOPUS_REPO_ROOT:-/data/repos}:${OCTOPUS_REPO_ROOT:-/data/repos}
     environment:
       - SPRING_PROFILES_ACTIVE=docker
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-root}
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:-octopus123}
+      - OCTOPUS_REPO_ROOT=${OCTOPUS_REPO_ROOT:-/data/repos}
       - OCTOPUS_PSI_HOST_WORKSPACE_ROOT=${HOME}/workspace
+      - OCTOPUS_PSI_HOST_REPO_ROOT=${OCTOPUS_REPO_ROOT:-/data/repos}
     depends_on:
       git:
         condition: service_healthy

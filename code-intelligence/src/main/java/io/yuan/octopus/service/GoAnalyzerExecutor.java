@@ -36,6 +36,10 @@ public class GoAnalyzerExecutor {
     private final String serviceUrl;
     private final long timeoutSeconds;
     private final String hostWorkspaceRoot;
+    /** 仓库存储根（容器侧路径，OCTOPUS_REPO_ROOT），与 hostRepoRoot 配对翻译。 */
+    private final String repoBase;
+    /** 同径挂载时留空禁用翻译。 */
+    private final String hostRepoRoot;
     private final int connectRetryAttempts;
     private final long connectRetryIntervalSeconds;
     private final HttpClient httpClient;
@@ -43,11 +47,15 @@ public class GoAnalyzerExecutor {
     public GoAnalyzerExecutor(@Value("${octopus.go.service-url:http://localhost:8378}") String serviceUrl,
                               @Value("${octopus.go.timeout-seconds:600}") long timeoutSeconds,
                               @Value("${octopus.go.host-workspace-root:}") String hostWorkspaceRoot,
+                              @Value("${octopus.git.local-repo-base:/data/repos}") String repoBase,
+                              @Value("${octopus.go.host-repo-root:}") String hostRepoRoot,
                               @Value("${octopus.go.connect-retry-attempts:3}") int connectRetryAttempts,
                               @Value("${octopus.go.connect-retry-interval-seconds:5}") long connectRetryIntervalSeconds) {
         this.serviceUrl = serviceUrl;
         this.timeoutSeconds = timeoutSeconds;
         this.hostWorkspaceRoot = hostWorkspaceRoot;
+        this.repoBase = repoBase;
+        this.hostRepoRoot = hostRepoRoot;
         this.connectRetryAttempts = connectRetryAttempts;
         this.connectRetryIntervalSeconds = connectRetryIntervalSeconds;
         this.httpClient = HttpClient.newBuilder()
@@ -144,22 +152,26 @@ public class GoAnalyzerExecutor {
     }
 
     /**
-     * When the API runs in Docker but the Go analyzer runs on the host,
-     * translate the container path prefix to the host workspace root
-     * (same mapping as PSIExecutor).
+     * 容器/宿主机路径不一致时的前缀翻译（与 PSIExecutor 相同的双前缀规则：
+     * /workspace → host-workspace-root；repoBase → host-repo-root）。
+     * 同径挂载（推荐）时 host 配置留空即禁用。
      */
     private String mapProjectDirForService(String projectDir) {
-        if (hostWorkspaceRoot == null || hostWorkspaceRoot.isBlank()) {
-            return projectDir;
+        String mapped = mapPrefix(projectDir, "/workspace", hostWorkspaceRoot);
+        return mapPrefix(mapped, repoBase, hostRepoRoot);
+    }
+
+    private static String mapPrefix(String path, String containerPrefix, String hostRoot) {
+        if (hostRoot == null || hostRoot.isBlank() || containerPrefix == null || containerPrefix.isBlank()) {
+            return path;
         }
-        String containerPrefix = "/workspace";
-        if (!projectDir.equals(containerPrefix) && !projectDir.startsWith(containerPrefix + "/")) {
-            return projectDir;
+        if (!path.equals(containerPrefix) && !path.startsWith(containerPrefix + "/")) {
+            return path;
         }
-        String suffix = projectDir.substring(containerPrefix.length());
-        String root = hostWorkspaceRoot.endsWith("/")
-                ? hostWorkspaceRoot.substring(0, hostWorkspaceRoot.length() - 1)
-                : hostWorkspaceRoot;
+        String suffix = path.substring(containerPrefix.length());
+        String root = hostRoot.endsWith("/")
+                ? hostRoot.substring(0, hostRoot.length() - 1)
+                : hostRoot;
         return root + suffix;
     }
 }
