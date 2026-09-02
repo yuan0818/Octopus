@@ -7,5 +7,7 @@ octopus:
     uri: bolt://host.docker.internal:7687
   psi:
     service-url: http://host.docker.internal:8377
+  go:
+    service-url: http://host.docker.internal:8378
   git:
     service-url: http://git:8081

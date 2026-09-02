@@ -10,13 +10,14 @@ import org.springframework.stereotype.Service;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
 
 /**
  * Detects git repository metadata (branch and HEAD commit) for a local path.
- * Uses JGit's {@link FileRepositoryBuilder} to walk up the directory tree, handling
- * worktrees, submodules, packed-refs, and detached-HEAD states.
+ * Uses JGit's {@link FileRepositoryBuilder}, handling worktrees, submodules,
+ * packed-refs, and detached-HEAD states.
  */
 @Service
 public class LocalGitDetector {
@@ -27,12 +28,21 @@ public class LocalGitDetector {
 
     /**
      * Detects git branch and HEAD commit for the given path.
-     * Walks up the directory tree to find the nearest {@code .git} directory.
+     * <p>
+     * Only detects when the path itself or its <b>direct parent</b> is a git
+     * repository root — the common "local workspace" shapes (a repo checkout,
+     * or a workspace directory directly under the repo root). Walking further
+     * up would borrow an unrelated ancestor repo's version: e.g. a fixture
+     * directory nested deep inside another project's source tree must not be
+     * attributed that outer repo's HEAD commit.
      *
      * @param projectPath the directory to start from (usually the project root)
-     * @return detected git info, or empty if the path is not inside a git repository
+     * @return detected git info, or empty if no git root applies
      */
     public Optional<GitInfo> detect(Path projectPath) {
+        if (!isGitRootOrDirectChild(projectPath)) {
+            return Optional.empty();
+        }
         try {
             FileRepositoryBuilder builder = new FileRepositoryBuilder()
                     .findGitDir(projectPath.toFile())
@@ -76,6 +86,19 @@ public class LocalGitDetector {
             log.debug("Could not resolve HEAD commit: {}", e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * True when the path itself or its direct parent contains a {@code .git}
+     * (directory, or a file for linked worktrees/submodules).
+     */
+    private boolean isGitRootOrDirectChild(Path projectPath) {
+        Path abs = projectPath.toAbsolutePath();
+        if (Files.exists(abs.resolve(".git"))) {
+            return true;
+        }
+        Path parent = abs.getParent();
+        return parent != null && Files.exists(parent.resolve(".git"));
     }
 
     /**

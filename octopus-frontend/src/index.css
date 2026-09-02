@@ -93,6 +93,160 @@ body {
   color: #999;
 }
 
+/* ── 表单区统一视觉（Review 等页面的左侧配置面板） ── */
+.form-label {
+  display: block;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+  margin-bottom: 4px;
+  letter-spacing: 0.2px;
+}
+.form-field {
+  margin-bottom: 14px;
+}
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.88);
+  margin: 18px 0 10px;
+  padding-top: 12px;
+  border-top: 1px solid #f0f0f0;
+}
+.section-title.no-divider {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+/* ── 聊天消息气泡（Review 页右侧会话区） ── */
+.chat-message {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.chat-avatar {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  color: #fff;
+  margin-top: 2px;
+}
+.chat-bubble {
+  flex: 1;
+  min-width: 0;
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.chat-bubble.user {
+  background: #e6f4ff;
+  border-color: #bae0ff;
+}
+.chat-bubble.error {
+  background: #fff2f0;
+  border-color: #ffccc7;
+}
+.chat-meta {
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.4);
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── 统一代码块（审查结果中的 highlightedCode） ── */
+.code-block {
+  margin: 8px 0;
+  padding: 10px 14px;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+  font-family: var(--mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ── 看板快捷入口卡片 ── */
+.quick-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid #f0f0f0;
+  background: #fff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: left;
+  width: 100%;
+}
+.quick-action:hover {
+  border-color: #91caff;
+  background: #f5faff;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(22, 119, 255, 0.1);
+}
+.quick-action-icon {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+.quick-action-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.88);
+}
+.quick-action-desc {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+  margin-top: 2px;
+}
+
+/* ── 看板统计卡（图标色块版式） ── */
+.stat-card-inner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.stat-card-icon {
+  flex-shrink: 0;
+  width: 46px;
+  height: 46px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+}
+.stat-card-value {
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+.stat-card-title {
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.45);
+  margin-top: 2px;
+}
+
 /* Transition for page content */
 .page-container {
   animation: fadeIn 0.2s ease;

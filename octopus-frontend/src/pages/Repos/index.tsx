@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button, Table, Tag, Space, Modal, App, Popconfirm, Card, Typography, Input } from 'antd';
 import { PlusOutlined, SyncOutlined, ProjectOutlined, SearchOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons';
-import type { RepoConfig, JavaProject } from '../../types';
+import type { RepoConfig, DiscoveredProject } from '../../types';
 import { repoApi } from '../../api/repos';
 import RepoForm from './RepoForm';
 
@@ -13,7 +13,7 @@ export default function RepoList() {
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [editRepo, setEditRepo] = useState<RepoConfig | null>(null);
-  const [projects, setProjects] = useState<Record<number, JavaProject[]>>({});
+  const [projects, setProjects] = useState<Record<number, DiscoveredProject[]>>({});
   const [search, setSearch] = useState('');
 
   const loadRepos = () => {

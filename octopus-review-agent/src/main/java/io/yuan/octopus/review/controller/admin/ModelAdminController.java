@@ -17,10 +17,13 @@ public class ModelAdminController {
 
     private final ModelRegistry modelRegistry;
     private final ModelTester modelTester;
+    private final io.yuan.octopus.review.service.SecretCipher secretCipher;
 
-    public ModelAdminController(ModelRegistry modelRegistry, ModelTester modelTester) {
+    public ModelAdminController(ModelRegistry modelRegistry, ModelTester modelTester,
+                                io.yuan.octopus.review.service.SecretCipher secretCipher) {
         this.modelRegistry = modelRegistry;
         this.modelTester = modelTester;
+        this.secretCipher = secretCipher;
     }
 
     @GetMapping
@@ -30,11 +33,14 @@ public class ModelAdminController {
 
     @GetMapping("/configs")
     public Result<Map<String, ModelConfig>> getConfigs() {
-        return Result.success(modelRegistry.getAllConfigs());
+        Map<String, ModelConfig> configs = modelRegistry.getAllConfigs();
+        configs.values().forEach(c -> c.setApiKey(secretCipher.mask(c.getApiKey())));
+        return Result.success(configs);
     }
 
     @PostMapping
     public Result<Void> registerModel(@RequestBody ModelConfig config) {
+        preserveExistingKeyIfUnchanged(null, config);
         modelRegistry.register(config);
         return Result.success(null);
     }
@@ -42,8 +48,26 @@ public class ModelAdminController {
     @PutMapping("/{name}")
     public Result<Void> updateModel(@PathVariable String name, @RequestBody ModelConfig config) {
         config.setName(name);
+        preserveExistingKeyIfUnchanged(name, config);
         modelRegistry.register(config);
         return Result.success(null);
+    }
+
+    /** 编辑时密钥留空或保持掩码 → 沿用已存密钥（前端永不回显明文）。 */
+    private void preserveExistingKeyIfUnchanged(String name, ModelConfig config) {
+        if (config.getApiKey() != null && !config.getApiKey().isBlank() && !config.getApiKey().contains("****")) {
+            return;
+        }
+        ModelConfig existing = name != null ? modelRegistry.get(name) : null;
+        if (existing == null) {
+            // 新建但没填密钥：尝试按 provider 复用已存密钥
+            existing = modelRegistry.getAllConfigs().values().stream()
+                    .filter(c -> c.getProvider().equals(config.getProvider()))
+                    .findFirst().orElse(null);
+        }
+        if (existing != null) {
+            config.setApiKey(existing.getApiKey());
+        }
     }
 
     @DeleteMapping("/{name}")

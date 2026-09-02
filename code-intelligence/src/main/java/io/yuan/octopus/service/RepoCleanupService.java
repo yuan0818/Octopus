@@ -1,7 +1,7 @@
 package io.yuan.octopus.service;
 
-import io.yuan.octopus.entity.JavaProjectEntity;
-import io.yuan.octopus.repository.JavaProjectRepository;
+import io.yuan.octopus.entity.AnalyzedProjectEntity;
+import io.yuan.octopus.repository.AnalyzedProjectRepository;
 import io.yuan.octopus.repository.RepoConfigRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,7 +48,7 @@ public class RepoCleanupService {
     private final int maxCount;
     private final long maxSizeBytes;
     private final RepoConfigRepository repoConfigRepository;
-    private final JavaProjectRepository javaProjectRepository;
+    private final AnalyzedProjectRepository javaProjectRepository;
 
     public RepoCleanupService(
             @Value("${spring.git.local-repo-base:/data/repos}") String localRepoBase,
@@ -56,7 +56,7 @@ public class RepoCleanupService {
             @Value("${octopus.git.local-repo-max-count:50}") int maxCount,
             @Value("${octopus.git.local-repo-max-size-gb:100}") int maxSizeGb,
             RepoConfigRepository repoConfigRepository,
-            JavaProjectRepository javaProjectRepository) {
+            AnalyzedProjectRepository javaProjectRepository) {
         this.localRepoBase = Path.of(localRepoBase);
         this.ttlDays = ttlDays;
         this.maxCount = maxCount;
@@ -198,7 +198,7 @@ public class RepoCleanupService {
                         (a, b) -> a));
 
         Map<String, Instant> result = new java.util.HashMap<>();
-        for (JavaProjectEntity jp : javaProjectRepository.findAll()) {
+        for (AnalyzedProjectEntity jp : javaProjectRepository.findAll()) {
             if (jp.getAnalyzedAt() == null) continue;
             String repoName = configIdToRepoName.getOrDefault(
                     jp.getRepoConfigId(), String.valueOf(jp.getRepoConfigId()));

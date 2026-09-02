@@ -9,5 +9,6 @@ public record ReconstructResponse(
     List<String> involvedClasses,
     int totalMethods,
     int totalChars,
-    boolean truncated
+    boolean truncated,
+    String sourceOrigin   // "git" | "mysql_fallback"; 表示源码来源
 ) {}

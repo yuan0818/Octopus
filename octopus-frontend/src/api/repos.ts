@@ -1,5 +1,5 @@
 import http from './client';
-import type { RepoConfig, RepoConfigForm, RepoSyncResult, JavaProject } from '../types';
+import type { RepoConfig, RepoConfigForm, RepoSyncResult, DiscoveredProject } from '../types';
 
 export const repoApi = {
   list: () => http.get<RepoConfig[]>('/repos'),
@@ -14,5 +14,5 @@ export const repoApi = {
 
   sync: (id: number) => http.post<RepoSyncResult>(`/repos/${id}/sync`),
 
-  projects: (id: number) => http.get<JavaProject[]>(`/repos/${id}/projects`),
+  projects: (id: number) => http.get<DiscoveredProject[]>(`/repos/${id}/projects`),
 };

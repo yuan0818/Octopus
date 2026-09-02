@@ -9,7 +9,7 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
-      ddl-auto: none
+      ddl-auto: update
     show-sql: false
     defer-datasource-initialization: true
     properties:
@@ -20,6 +20,8 @@ spring:
       mode: always
 
 review:
+  query-service:
+    url: ${QUERY_SERVICE_URL:http://localhost:8080}
   reconstruct:
     url: http://localhost:8082
     connect-timeout: 5000

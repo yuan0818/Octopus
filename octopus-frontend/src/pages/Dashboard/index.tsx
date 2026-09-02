@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, Col, Row, Statistic, Table, Tag, Button, Space, Typography } from 'antd';
+import { Card, Col, Row, Table, Tag, Button, Space, Typography, Empty } from 'antd';
 import {
   DatabaseOutlined,
   ExperimentOutlined,
@@ -9,6 +9,9 @@ import {
   BranchesOutlined,
   ClockCircleOutlined,
   RightOutlined,
+  RocketOutlined,
+  CommentOutlined,
+  PlusOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { repoApi } from '../../api/repos';
@@ -98,46 +101,72 @@ export default function Dashboard() {
   ];
 
   const quickActions = [
-    { label: '管理仓库', icon: <DatabaseOutlined />, path: '/repos', primary: true },
-    { label: '分析任务', icon: <ExperimentOutlined />, path: '/analysis', primary: false },
-    { label: '调用图查询', icon: <CodeOutlined />, path: '/query/callgraph', primary: false },
-    { label: 'Code Review', icon: <BranchesOutlined />, path: '/review', primary: false },
+    { label: '管理仓库', desc: '添加 Git 仓库与凭证', icon: <DatabaseOutlined />, path: '/repos', color: '#1677ff', bg: '#e6f4ff' },
+    { label: '分析任务', desc: '按 Tag 触发代码分析', icon: <RocketOutlined />, path: '/analysis', color: '#722ed1', bg: '#f9f0ff' },
+    { label: '调用图查询', desc: '方法级调用链与影响面', icon: <CodeOutlined />, path: '/query/callgraph', color: '#13c2c2', bg: '#e6fffb' },
+    { label: 'Code Review', desc: '入口链路智能审查', icon: <CommentOutlined />, path: '/review', color: '#fa8c16', bg: '#fff7e6' },
   ];
+
+  const isFirstTime = !loading && repos.length === 0;
 
   return (
     <div className="page-container">
       {/* Stats */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+      <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
         {statCards.map((s) => (
           <Col xs={12} sm={12} md={6} key={s.title}>
-            <Card className="stat-card" style={{ borderTop: `3px solid ${s.color}` }}>
-              <Statistic
-                title={<Text type="secondary">{s.title}</Text>}
-                value={s.value}
-                valueStyle={{ color: s.color, fontWeight: 600 }}
-                prefix={s.icon}
-              />
+            <Card className="stat-card" styles={{ body: { padding: '18px 20px' } }}>
+              <div className="stat-card-inner">
+                <div className="stat-card-icon" style={{ color: s.color, background: s.bg }}>
+                  {s.icon}
+                </div>
+                <div>
+                  <div className="stat-card-value" style={{ color: s.color }}>{s.value}</div>
+                  <div className="stat-card-title">{s.title}</div>
+                </div>
+              </div>
             </Card>
           </Col>
         ))}
       </Row>
 
       {/* Quick Actions */}
-      <Card style={{ marginBottom: 24 }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-          {quickActions.map((a) => (
-            <Button
-              key={a.path}
-              type={a.primary ? 'primary' : 'default'}
-              icon={a.icon}
-              size="large"
-              onClick={() => navigate(a.path)}
-            >
-              {a.label}
+      <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+        {quickActions.map((a) => (
+          <Col xs={12} md={6} key={a.path}>
+            <div className="quick-action" onClick={() => navigate(a.path)}>
+              <div className="quick-action-icon" style={{ color: a.color, background: a.bg }}>
+                {a.icon}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div className="quick-action-label">{a.label}</div>
+                <div className="quick-action-desc">{a.desc}</div>
+              </div>
+            </div>
+          </Col>
+        ))}
+      </Row>
+
+      {/* 首次使用引导：还没有仓库时给出明确的上手路径 */}
+      {isFirstTime && (
+        <Card style={{ marginBottom: 20 }} styles={{ body: { padding: '32px 24px' } }}>
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={
+              <span>
+                还没有配置仓库<br />
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  添加仓库 → 触发 Tag 分析 → 查询调用图 / 发起 Code Review
+                </Text>
+              </span>
+            }
+          >
+            <Button type="primary" size="large" icon={<PlusOutlined />} onClick={() => navigate('/repos')}>
+              添加第一个仓库
             </Button>
-          ))}
-        </div>
-      </Card>
+          </Empty>
+        </Card>
+      )}
 
       {/* Recent Tasks */}
       <Card
@@ -152,7 +181,7 @@ export default function Dashboard() {
             查看全部 <RightOutlined />
           </Button>
         }
-        style={{ marginBottom: 24 }}
+        style={{ marginBottom: 20 }}
       >
         <Table
           dataSource={tasks.slice(0, 8)}
@@ -161,6 +190,7 @@ export default function Dashboard() {
           pagination={false}
           columns={taskColumns}
           loading={loading}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无分析任务" /> }}
         />
       </Card>
 
@@ -184,6 +214,7 @@ export default function Dashboard() {
           size="small"
           pagination={false}
           loading={loading}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无仓库，点击右上角「管理」添加" /> }}
           columns={[
             { title: 'ID', dataIndex: 'id', width: 60, render: (v: number) => <Text code style={{ fontSize: 12 }}>#{v}</Text> },
             { title: '仓库 URL', dataIndex: 'repoUrl', ellipsis: true, render: (v: string) => <Text copyable={{ text: v }}>{v}</Text> },

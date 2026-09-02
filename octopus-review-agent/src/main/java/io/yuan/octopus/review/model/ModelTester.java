@@ -44,6 +44,7 @@ public class ModelTester {
             HttpLLMAdapter adapter = new HttpLLMAdapter();
             LLMConfig llmConfig = new LLMConfig();
             llmConfig.setProvider(config.getProvider());
+            llmConfig.setApiFormat(config.getApiFormat());
             llmConfig.setModel(config.getModelId());
             llmConfig.setApiKey(apiKey);
             llmConfig.setApiUrl(config.getApiUrl());

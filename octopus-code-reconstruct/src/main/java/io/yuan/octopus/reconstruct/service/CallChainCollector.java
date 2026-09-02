@@ -61,10 +61,36 @@ public class CallChainCollector {
     public enum Strategy { BFS, DFS }
 
     public CallChainResult collect(Long projectId, String className, String methodName, String strategy) {
-        return collect(projectId, className, methodName, Strategy.valueOf(strategy != null ? strategy : "BFS"));
+        return collect(projectId, className, methodName, strategy, null);
+    }
+
+    /**
+     * 版本化调用链收集。commitId 为空时走 HEAD（current=true），非空时精确匹配 commitId。
+     */
+    public CallChainResult collect(Long projectId, String className, String methodName,
+                                   String strategy, String commitId) {
+        return collect(projectId, className, methodName, strategy, null, commitId);
+    }
+
+    /**
+     * 版本化 + 分支限定调用链收集。branch 非空时仅匹配该分支的节点。
+     */
+    public CallChainResult collect(Long projectId, String className, String methodName,
+                                   String strategy, String branch, String commitId) {
+        return collect(projectId, className, methodName,
+                Strategy.valueOf(strategy != null ? strategy : "BFS"), branch, commitId);
     }
 
     public CallChainResult collect(Long projectId, String className, String methodName, Strategy strategy) {
+        return collect(projectId, className, methodName, strategy, null);
+    }
+
+    public CallChainResult collect(Long projectId, String className, String methodName, Strategy strategy, String commitId) {
+        return collect(projectId, className, methodName, strategy, null, commitId);
+    }
+
+    public CallChainResult collect(Long projectId, String className, String methodName,
+                                   Strategy strategy, String branch, String commitId) {
         Set<String> visitedSigs = new LinkedHashSet<>();
         Set<String> involvedClasses = new LinkedHashSet<>();
         Map<String, String> parentMap = new LinkedHashMap<>();
@@ -84,7 +110,7 @@ public class CallChainCollector {
                 current = ((Queue<TraversalItem>) frontier).poll();
             }
 
-            List<CalleeRow> callees = repo.findDirectCallees(projectId, current.className, current.methodName);
+            List<CalleeRow> callees = repo.findDirectCallees(projectId, current.className, current.methodName, commitId, branch);
             for (CalleeRow callee : callees) {
                 if (visitedSigs.add(callee.signature())) {
                     parentMap.put(callee.signature(), current.signature);
@@ -103,7 +129,7 @@ public class CallChainCollector {
             classToSigs.computeIfAbsent(cls, k -> new LinkedHashSet<>()).add(sig);
         }
         // Anchor method
-        String anchorSig = repo.findSignature(projectId, className, methodName);
+        String anchorSig = repo.findSignature(projectId, className, methodName, commitId, branch);
         if (anchorSig != null) {
             classToSigs.computeIfAbsent(className, k -> new LinkedHashSet<>()).add(anchorSig);
         }
@@ -120,11 +146,37 @@ public class CallChainCollector {
      * to find all callers, until no more callers are found.
      */
     public CallChainResult collectUpstream(Long projectId, String className, String methodName, String strategy) {
+        return collectUpstream(projectId, className, methodName, strategy, null);
+    }
+
+    /**
+     * 版本化反向调用链收集。commitId 为空时走 HEAD，非空时精确匹配 commitId。
+     */
+    public CallChainResult collectUpstream(Long projectId, String className, String methodName,
+                                           String strategy, String commitId) {
+        return collectUpstream(projectId, className, methodName, strategy, null, commitId);
+    }
+
+    /**
+     * 版本化 + 分支限定反向调用链收集。branch 非空时仅匹配该分支的节点。
+     */
+    public CallChainResult collectUpstream(Long projectId, String className, String methodName,
+                                           String strategy, String branch, String commitId) {
         Strategy strat = strategy != null ? Strategy.valueOf(strategy) : Strategy.BFS;
-        return collectUpstream(projectId, className, methodName, strat);
+        return collectUpstream(projectId, className, methodName, strat, branch, commitId);
     }
 
     public CallChainResult collectUpstream(Long projectId, String className, String methodName, Strategy strategy) {
+        return collectUpstream(projectId, className, methodName, strategy, null);
+    }
+
+    public CallChainResult collectUpstream(Long projectId, String className, String methodName,
+                                           Strategy strategy, String commitId) {
+        return collectUpstream(projectId, className, methodName, strategy, null, commitId);
+    }
+
+    public CallChainResult collectUpstream(Long projectId, String className, String methodName,
+                                           Strategy strategy, String branch, String commitId) {
         Set<String> visitedSigs = new LinkedHashSet<>();
         Set<String> involvedClasses = new LinkedHashSet<>();
         Map<String, String> parentMap = new LinkedHashMap<>();
@@ -143,7 +195,7 @@ public class CallChainCollector {
                 current = ((Queue<TraversalItem>) frontier).poll();
             }
 
-            List<CalleeRow> callers = repo.findDirectCallers(projectId, current.className, current.methodName);
+            List<CalleeRow> callers = repo.findDirectCallers(projectId, current.className, current.methodName, commitId, branch);
             for (CalleeRow caller : callers) {
                 if (visitedSigs.add(caller.signature())) {
                     parentMap.put(caller.signature(), current.signature);
@@ -162,7 +214,7 @@ public class CallChainCollector {
             classToSigs.computeIfAbsent(cls, k -> new LinkedHashSet<>()).add(sig);
         }
         // Anchor method
-        String anchorSig = repo.findSignature(projectId, className, methodName);
+        String anchorSig = repo.findSignature(projectId, className, methodName, commitId, branch);
         if (anchorSig != null) {
             classToSigs.computeIfAbsent(className, k -> new LinkedHashSet<>()).add(anchorSig);
         }

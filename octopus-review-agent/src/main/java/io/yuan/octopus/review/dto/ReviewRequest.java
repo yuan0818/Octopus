@@ -29,9 +29,14 @@ public class ReviewRequest {
 
     private String modelName;       // 使用的模型名称，从 ModelRegistry 中加载完整配置
 
+    private String branch;          // Git 分支名（可选）
+
     private String commitId;       // 分析时的 commit hash
 
     private String tag;             // Git tag（可选）
+
+    /** 链路版本对比摘要（来自 entry-chain-diff），注入 prompt 的 Diff Context 供评审引用。 */
+    private String diffContext;
 
     private ReviewMode reviewMode;  // REQUIREMENT_AWARE / RISK_BASED；为空时按是否有需求自动推导
 
@@ -72,11 +77,17 @@ public class ReviewRequest {
     public String getModelName() { return modelName; }
     public void setModelName(String modelName) { this.modelName = modelName; }
 
+    public String getBranch() { return branch; }
+    public void setBranch(String branch) { this.branch = branch; }
+
     public String getCommitId() { return commitId; }
     public void setCommitId(String commitId) { this.commitId = commitId; }
 
     public String getTag() { return tag; }
     public void setTag(String tag) { this.tag = tag; }
+
+    public String getDiffContext() { return diffContext; }
+    public void setDiffContext(String diffContext) { this.diffContext = diffContext; }
 
     public ReviewMode getReviewMode() { return reviewMode; }
     public void setReviewMode(ReviewMode reviewMode) { this.reviewMode = reviewMode; }

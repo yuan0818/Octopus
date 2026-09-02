@@ -28,6 +28,7 @@ public interface ReviewSessionRepository extends JpaRepository<ReviewSession, St
            "AND (:anchorClass IS NULL OR rs.anchorClass LIKE %:anchorClass%) " +
            "AND (:startTime IS NULL OR rs.createdAt >= :startTime) " +
            "AND (:endTime IS NULL OR rs.createdAt <= :endTime) " +
+           "AND (:commitId IS NULL OR rs.commitId = :commitId) " +
            "ORDER BY rs.createdAt DESC")
     Page<ReviewSession> findSessionsFiltered(
             @Param("projectId") String projectId,
@@ -35,7 +36,10 @@ public interface ReviewSessionRepository extends JpaRepository<ReviewSession, St
             @Param("anchorClass") String anchorClass,
             @Param("startTime") LocalDateTime startTime,
             @Param("endTime") LocalDateTime endTime,
+            @Param("commitId") String commitId,
             Pageable pageable);
 
     List<ReviewSession> findByProjectIdAndAnchorClassOrderByCreatedAtDesc(String projectId, String anchorClass);
+
+    List<ReviewSession> findByChangeReviewTaskIdOrderByCreatedAtAsc(Long changeReviewTaskId);
 }

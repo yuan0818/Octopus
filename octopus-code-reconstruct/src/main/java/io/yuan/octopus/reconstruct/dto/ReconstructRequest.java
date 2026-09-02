@@ -15,7 +15,13 @@ public record ReconstructRequest(
     Integer maxDepth,
 
     /** BFS or DFS traversal strategy. Defaults to BFS when null. */
-    String strategy
+    String strategy,
+
+    /** Git 分支名（可选）。缺省 = HEAD。 */
+    String branch,
+
+    /** Commit hash（可选）。缺省 = HEAD。 */
+    String commitId
 ) {
     public String getStrategy() {
         return strategy != null ? strategy : "BFS";

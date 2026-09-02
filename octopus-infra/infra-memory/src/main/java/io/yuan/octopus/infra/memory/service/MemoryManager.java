@@ -39,6 +39,18 @@ public interface MemoryManager {
                        int durationMs, String summary, String status,
                        String commitId, String tag);
 
+    /**
+     * 变更触发审查重载：在版本化字段之外关联 Change / patchset / change_review_task。
+     * changeNumber / patchsetNumber / changeReviewTaskId 可为 null（既有非 change 触发的 review 走原签名）。
+     */
+    void recordSession(String sessionId, String projectId, String anchorClass,
+                       String anchorMethod, String strategy, String requirements,
+                       String chainClasses, String fullReport, String model,
+                       int promptTokens, int completionTokens, int totalTokens,
+                       int durationMs, String summary, String status,
+                       String commitId, String tag,
+                       String changeNumber, Integer patchsetNumber, Long changeReviewTaskId);
+
     List<ReviewFinding> getFindings(String projectId, String anchorClass);
 
     List<ReviewSession> getSessions(String projectId);
@@ -47,11 +59,16 @@ public interface MemoryManager {
 
     Page<ReviewSession> getSessionsFiltered(String projectId, String status, String anchorClass,
                                              LocalDateTime startTime, LocalDateTime endTime,
-                                             int page, int size);
+                                             String commitId, int page, int size);
 
     Optional<ReviewSession> getSessionById(String sessionId);
 
     List<ReviewFinding> getFindingsBySession(String sessionId);
+
+    /**
+     * 按 change_review_task_id 查关联的 review session（变更触发审查详情用）。
+     */
+    List<ReviewSession> getSessionsByChangeTask(Long changeReviewTaskId);
 
     // ── 项目知识 ──
 

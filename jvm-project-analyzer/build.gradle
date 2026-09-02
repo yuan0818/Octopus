@@ -73,7 +73,23 @@ intellijPlatform {
 
 tasks.named('runIde') {
     enabled = true
-    jvmArgs = [
+    // Resolve the nio-fs.jar for MultiRoutingFileSystemProvider (required by JBR).
+    // 路径来自 -Poctopus.nioFsJar=<path>（本机 IDEA 安装位置因人而异）；
+    // 未指定时优先取 ideaHome 同一安装的 nio-fs.jar——不同版本 IDEA 的 jar
+    // 与运行时 JBR 字节码版本不匹配会导致 VM 初始化失败（class file version 错误），
+    // 仍找不到时给出警告并跳过（不阻塞 runIde 启动）
+    def configured = project.findProperty('octopus.nioFsJar')
+    def defaultNioFsJar = localIdeaDir != null && new File(localIdeaDir, 'Contents/lib/nio-fs.jar').exists()
+            ? new File(localIdeaDir, 'Contents/lib/nio-fs.jar')
+            : file("/Applications/IntelliJ IDEA.app/Contents/lib/nio-fs.jar")
+    def nioFsJar = configured ? file(configured) : defaultNioFsJar
+    def extraJvmArgs = []
+    if (nioFsJar.exists()) {
+        extraJvmArgs << "-Xbootclasspath/a:${nioFsJar.path}"
+    } else {
+        logger.warn("nio-fs.jar not found at '${nioFsJar.path}'; pass -Poctopus.nioFsJar=<path> if JBR file-system providers are required")
+    }
+    jvmArgs = extraJvmArgs + [
         '-Xms256m',
         '-Xmx4g',
         '-XX:ReservedCodeCacheSize=512m',

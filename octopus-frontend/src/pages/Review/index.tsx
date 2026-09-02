@@ -9,14 +9,17 @@ import {
   CodeOutlined, UploadOutlined,
   WarningOutlined, InfoCircleOutlined, ThunderboltOutlined,
   ApiOutlined, FilterOutlined, HistoryOutlined, ClockCircleOutlined,
+  FileTextOutlined, SendOutlined, CommentOutlined, CloudDownloadOutlined,
 } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import { reviewApi } from '../../api/review';
 import { adminApi } from '../../api/admin';
 import { queryApi } from '../../api/query';
+import { useBranchCommit } from '../../components/BranchCommitContext';
+import BranchCommitInlineSelector from '../../components/BranchCommitInlineSelector';
 import type { ReviewResponse, RequirementCheck, CodeIssue, RequirementItem } from '../../types';
 
-const { Title, Text, Paragraph } = Typography;
+const { Text, Paragraph } = Typography;
 const { Panel } = Collapse;
 
 const severityColor: Record<string, string> = {
@@ -25,6 +28,7 @@ const severityColor: Record<string, string> = {
 
 export default function ReviewPage() {
   const { message } = App.useApp();
+  const { branch, commitId, setBranch, setCommitId } = useBranchCommit();
   const [projectId, setProjectId] = useState<number>();
   const [classId, setClassId] = useState<number>();
   const [className, setClassName] = useState('');
@@ -53,6 +57,27 @@ export default function ReviewPage() {
   const [selectedSkillId, setSelectedSkillId] = useState<string>('');
   const [models, setModels] = useState<any[]>([]);
   const [selectedModelName, setSelectedModelName] = useState<string>('');
+
+  // ── 追问（混合形态对话层）──
+  const [chatInput, setChatInput] = useState('');
+  const [chatThreadId, setChatThreadId] = useState<string>('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatInputRef = useRef<any>(null);
+  /** 最近一次审查结果（作为追问上下文传给后端） */
+  const lastReviewRef = useRef<any>(null);
+
+  // ── 需求源（Jira 等工单拉取）──
+  const [reqSources, setReqSources] = useState<any[]>([]);
+  const [reqSource, setReqSource] = useState<string>('jira');
+  const [reqTicket, setReqTicket] = useState('');
+  const [reqFetching, setReqFetching] = useState(false);
+  const [reqOrigin, setReqOrigin] = useState<string>('');
+
+  useEffect(() => {
+    reviewApi.fetchRequirementSources()
+      .then(d => setReqSources(Array.isArray(d) ? d : []))
+      .catch(() => setReqSources([]));
+  }, []);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -87,13 +112,14 @@ export default function ReviewPage() {
   useEffect(() => {
     if (!projectId) return;
     const loader = entryMode === 'endpoints'
-      ? reviewApi.listEndpointClasses(projectId)
+      ? reviewApi.listEndpointClasses(projectId, undefined, branch, commitId)
       : entryMode === 'entries'
-        ? reviewApi.listEntryClasses(projectId)
-      : reviewApi.listClasses(projectId);
+        ? reviewApi.listEntryClasses(projectId, undefined, branch, commitId)
+      : reviewApi.listClasses(projectId, undefined, branch, commitId);
     loader.then(d => setClasses(Array.isArray(d) ? d : [])).catch(() => {});
     setClassId(undefined); setClassName(''); setMethods([]); setMethodName('');
-  }, [projectId, entryMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, entryMode, branch, commitId]);
 
   // ── Load methods when class changes ──
   useEffect(() => {
@@ -101,13 +127,14 @@ export default function ReviewPage() {
     const cls = classes.find(c => c.id === classId);
     setClassName(cls?.qualified_name || '');
     const loader = entryMode === 'endpoints'
-      ? reviewApi.listEndpointMethods(classId)
+      ? reviewApi.listEndpointMethods(classId, undefined, branch, commitId)
       : entryMode === 'entries'
-        ? reviewApi.listEntryMethods(classId)
-      : reviewApi.listMethods(classId);
+        ? reviewApi.listEntryMethods(classId, undefined, branch, commitId)
+      : reviewApi.listMethods(classId, undefined, branch, commitId);
     loader.then(d => setMethods(Array.isArray(d) ? d : [])).catch(() => {});
     setMethodName('');
-  }, [classId, entryMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classId, entryMode, branch, commitId]);
 
   // ── Add requirement ──
   const addRequirement = () => {
@@ -139,7 +166,7 @@ export default function ReviewPage() {
 
     // Validate first
     try {
-      const validation = await reviewApi.validate({ projectId, className, methodName, strategy, requirements, skillId: selectedSkillId, modelName: selectedModelName, docPath, reviewMode });
+      const validation = await reviewApi.validate({ projectId, className, methodName, strategy, requirements, skillId: selectedSkillId, modelName: selectedModelName, docPath, reviewMode, branch, commitId });
       if (!validation.valid) {
         message.error(validation.errors.join('; '));
         return;
@@ -167,8 +194,11 @@ export default function ReviewPage() {
 
     try {
       const result = await reviewApi.review({
-        projectId: projectId!, className, methodName, strategy, requirements, mode: 'SYNC', skillId: selectedSkillId, modelName: selectedModelName, docPath, reviewMode,
+        projectId: projectId!, className, methodName, strategy, requirements, mode: 'SYNC', skillId: selectedSkillId, modelName: selectedModelName, docPath, reviewMode, branch, commitId,
       });
+      lastReviewRef.current = result;
+      // 新审查开启新追问线程
+      setChatThreadId(`chat-${Date.now()}`);
 
       setMessages(prev => [...prev, {
         role: 'assistant',
@@ -187,6 +217,67 @@ export default function ReviewPage() {
     }
   };
 
+  // ── 追问发送 ──
+  const canChat = !loading && !chatLoading && !!lastReviewRef.current && !!projectId && !!className && !!methodName;
+
+  const sendChat = async (overrideQuestion?: string) => {
+    const question = (overrideQuestion ?? chatInput).trim();
+    if (!question || !canChat) return;
+    setChatInput('');
+    setChatLoading(true);
+    setMessages(prev => [...prev, { role: 'user', content: question, timestamp: new Date() }]);
+    try {
+      const last = lastReviewRef.current;
+      const reviewResult = JSON.stringify({
+        summary: last?.summary,
+        issues: (last?.issues ?? []).slice(0, 10).map((i: any) => ({
+          id: i.id, title: i.title, category: i.category, severity: i.severity,
+          confidence: i.confidence, summary: i.summary, suggestion: i.suggestion,
+        })),
+      });
+      const resp = await reviewApi.chat({
+        threadId: chatThreadId || undefined,
+        question,
+        projectId, className, methodName, strategy,
+        branch, commitId,
+        skillId: selectedSkillId, modelName: selectedModelName,
+        reviewResult,
+      });
+      setChatThreadId(resp.threadId);
+      setMessages(prev => [...prev, { role: 'assistant', content: resp.answer, timestamp: new Date() }]);
+    } catch (e: any) {
+      setMessages(prev => [...prev, { role: 'error', content: `追问失败: ${e.message || '未知错误'}`, timestamp: new Date() }]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  /** issue 卡片的「追问」：带该 issue 上下文预填输入框 */
+  const askAboutIssue = (issue: any) => {
+    setChatInput(`关于 issue ${issue?.id ?? ''}「${issue?.title ?? ''}」：`);
+    setTimeout(() => {
+      chatInputRef.current?.focus?.();
+    }, 50);
+  };
+
+  /** 从工单系统拉取需求并填充（requirements 非空后自动切换按需求审查） */
+  const fetchRequirements = async () => {
+    const ticket = reqTicket.trim();
+    if (!reqSource || !ticket) return;
+    setReqFetching(true);
+    try {
+      const resp = await reviewApi.fetchRequirement(reqSource, ticket);
+      setRequirements(resp.items ?? []);
+      setDocPath(undefined);
+      setReqOrigin(`${reqSource.toUpperCase()} ${resp.ticketKey}（${resp.items?.length ?? 0} 条）`);
+    } catch (e: any) {
+      setReqOrigin('');
+      setMessages(prev => [...prev, { role: 'error', content: `需求拉取失败: ${e.message || '未知错误'}`, timestamp: new Date() }]);
+    } finally {
+      setReqFetching(false);
+    }
+  };
+
   // ── Render helpers ──
   const renderCheck = (check: RequirementCheck) => (
     <div key={check.requirementId} style={{ background: check.passed ? '#f6ffed' : '#fff2f0', borderRadius: 8, padding: '12px 16px', marginBottom: 8, border: `1px solid ${check.passed ? '#b7eb8f' : '#ffccc7'}` }}>
@@ -197,7 +288,7 @@ export default function ReviewPage() {
       </Space>
       <Paragraph style={{ margin: '8px 0 0', color: '#555' }}>{check.detail}</Paragraph>
       {check.highlightedCode && (
-        <pre style={{ margin: '8px 0', padding: '10px 14px', background: '#1e1e1e', color: '#d4d4d4', borderRadius: 6, fontSize: 12, lineHeight: 1.6, overflowX: 'auto', fontFamily: "'SF Mono','Fira Code',Consolas,monospace", whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+        <pre className="code-block">
           <code>{check.highlightedCode}</code>
         </pre>
       )}
@@ -211,12 +302,21 @@ export default function ReviewPage() {
       <Space><Badge color={severityColor[issue.severity] || '#999'} /><Tag color={severityColor[issue.severity] || 'default'}>{issue.severity}</Tag><Tag>{issue.category}</Tag></Space>
       <Paragraph style={{ margin: '8px 0 0', color: '#333' }}>{issue.description}</Paragraph>
       {issue.highlightedCode && (
-        <pre style={{ margin: '8px 0', padding: '10px 14px', background: '#1e1e1e', color: '#d4d4d4', borderRadius: 6, fontSize: 12, lineHeight: 1.6, overflowX: 'auto', fontFamily: "'SF Mono','Fira Code',Consolas,monospace", whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+        <pre className="code-block">
           <code>{issue.highlightedCode}</code>
         </pre>
       )}
       {issue.codeReferences?.map((ref, i) => <Tag key={i} icon={<CodeOutlined />}>{ref}</Tag>)}
       {issue.suggestion && <Alert type="success" showIcon icon={<CheckCircleOutlined />} message={issue.suggestion} style={{ marginTop: 8, background: '#f6ffed', border: 'none' }} />}
+      <Button
+        size="small"
+        type="text"
+        icon={<CommentOutlined />}
+        style={{ marginTop: 8, color: '#1677ff', padding: 0 }}
+        onClick={() => askAboutIssue({ id: issue.codeReferences?.[0] ?? '', title: issue.description })}
+      >
+        追问此问题
+      </Button>
     </div>
   );
 
@@ -225,21 +325,20 @@ export default function ReviewPage() {
     <Row gutter={16} style={{ height: 'calc(100vh - 100px)' }}>
       {/* ── Left panel ── */}
       <Col xs={24} lg={8} style={{ height: '100%' }}>
-        <Card size="small" style={{ height: '100%', overflow: 'auto' }} styles={{ body: { padding: 16 } }}>
+        <Card size="small" style={{ height: '100%', overflow: 'auto' }} styles={{ body: { padding: 20 } }}>
 
-          {/* Skill selector */}
-          <div style={{ marginBottom: 12 }}>
-            <Text type="secondary">审查 Skill</Text>
+          {/* Agent 配置：Skill + 模型 */}
+          <div className="section-title no-divider"><RobotOutlined /> Agent 配置</div>
+          <div className="form-field">
+            <span className="form-label">审查 Skill</span>
             <Select style={{ width: '100%' }} value={selectedSkillId} onChange={setSelectedSkillId}
               options={skills.map(s => ({ value: s.id, label: `[${s.preferredProvider}] ${s.name} (${s.id})` }))}
               placeholder="选择审查 Skill"
               notFoundContent={<span>暂无 Skill，请先在 Agent 配置中创建 <Button size="small" type="link" onClick={() => window.location.href = '/admin'}>去配置</Button></span>}
             />
           </div>
-
-          {/* Model selector */}
-          <div style={{ marginBottom: 12 }}>
-            <Text type="secondary">模型</Text>
+          <div className="form-field">
+            <span className="form-label">模型</span>
             <Select style={{ width: '100%' }} value={selectedModelName || undefined} onChange={setSelectedModelName}
               options={models.map((m: any) => ({ value: m.name, label: `${m.name} (${m.provider} / ${m.modelId})` }))}
               placeholder="选择模型"
@@ -247,20 +346,20 @@ export default function ReviewPage() {
             />
           </div>
 
-          <Title level={5} style={{ margin: '12px 0 8px' }}>审查入口</Title>
+          <div className="section-title"><ApiOutlined /> 审查入口</div>
 
           {/* Mode toggle: API-first entry selection */}
-          <div style={{ marginBottom: 8 }}>
-            <Space.Compact size="small">
-              <Button type={entryMode === 'endpoints' ? 'primary' : 'default'}
+          <div style={{ marginBottom: 12 }}>
+            <Space.Compact size="small" style={{ width: '100%' }}>
+              <Button type={entryMode === 'endpoints' ? 'primary' : 'default'} style={{ flex: 1 }}
                 icon={<ApiOutlined />} onClick={() => setEntryMode('endpoints')}>
                 API 端点
               </Button>
-              <Button type={entryMode === 'entries' ? 'primary' : 'default'}
+              <Button type={entryMode === 'entries' ? 'primary' : 'default'} style={{ flex: 1 }}
                 icon={<ClockCircleOutlined />} onClick={() => setEntryMode('entries')}>
                 业务入口
               </Button>
-              <Button type={entryMode === 'all' ? 'primary' : 'default'}
+              <Button type={entryMode === 'all' ? 'primary' : 'default'} style={{ flex: 1 }}
                 icon={<FilterOutlined />} onClick={() => setEntryMode('all')}>
                 任意方法
               </Button>
@@ -268,9 +367,18 @@ export default function ReviewPage() {
           </div>
 
           {/* Project selector */}
-          <div style={{ marginBottom: 6 }}>
-            <Text type="secondary">项目</Text>
-            <Select style={{ width: '100%' }} value={projectId} onChange={(v) => setProjectId(v)}
+          <div className="form-field">
+            <span className="form-label">项目</span>
+            <Select style={{ width: '100%' }} value={projectId}
+              onChange={(v) => {
+                setProjectId(v);
+                const p = projects.find((x) => x.id === v);
+                if (p) {
+                  // 切项目时用项目自带 branch/commitId 作初值，避免残留上一项目的版本选择
+                  setBranch(p.branch);
+                  setCommitId(p.commitId);
+                }
+              }}
               placeholder="选择项目"
               options={(entryMode === 'endpoints' ? projects.filter(p => p.isApiService) : projects)
                 .map(p => ({ value: p.id, label: `${p.projectName} [${p.branch || 'default'}]` }))}
@@ -284,11 +392,23 @@ export default function ReviewPage() {
               }
               allowClear
             />
+            <div style={{ marginTop: 6 }}>
+              <BranchCommitInlineSelector
+                projectId={projectId ?? null}
+                branch={branch}
+                commitId={commitId}
+                onBranchChange={setBranch}
+                onCommitChange={setCommitId}
+                fallbackBranch={projects.find(p => p.id === projectId)?.branch}
+                fallbackCommitId={projects.find(p => p.id === projectId)?.commitId}
+                width={140}
+              />
+            </div>
           </div>
 
           {/* Class selector (depends on project) */}
-          <div style={{ marginBottom: 6 }}>
-            <Text type="secondary">类名</Text>
+          <div className="form-field">
+            <span className="form-label">类名</span>
             <Select style={{ width: '100%' }} value={classId} onChange={(v) => setClassId(v)}
               placeholder={projectId ? "选择类" : "请先选择项目"}
               options={classes.map(c => ({ value: c.id, label: `${c.simple_name} (${c.qualified_name})` }))}
@@ -300,8 +420,8 @@ export default function ReviewPage() {
           </div>
 
           {/* Method selector (depends on class) */}
-          <div style={{ marginBottom: 12 }}>
-            <Text type="secondary">方法名</Text>
+          <div className="form-field">
+            <span className="form-label">方法名</span>
             <Space.Compact style={{ width: '100%' }}>
               <Select style={{ width: 'calc(100% - 80px)' }} value={methodName || undefined} onChange={(v) => setMethodName(v || '')}
                 placeholder={classId ? "选择方法" : "请先选择类"}
@@ -317,12 +437,38 @@ export default function ReviewPage() {
           </div>
 
           {/* Requirements */}
-          <Space style={{ justifyContent: 'space-between', width: '100%' }}>
-            <Text strong>
-              需求来源 ({requirements.length > 0 || docPath ? (docPath ? '📄 文档' : `${requirements.length} 条`) : '0'})
-              <Tag color={reviewMode === 'REQUIREMENT_AWARE' ? 'blue' : 'gold'} style={{ marginLeft: 8 }}>
-                {reviewMode === 'REQUIREMENT_AWARE' ? '按需求审查' : '无需求风险审查'}
-              </Tag>
+          <div className="section-title">
+            <FileTextOutlined /> 需求来源
+            <Tag color={reviewMode === 'REQUIREMENT_AWARE' ? 'blue' : 'gold'} style={{ marginLeft: 'auto' }}>
+              {reviewMode === 'REQUIREMENT_AWARE' ? '按需求审查' : '无需求风险审查'}
+            </Tag>
+          </div>
+
+          {/* 工单拉取：选工具 + 填单号（未配置的源禁用并提示去配置） */}
+          <Space.Compact style={{ width: '100%' }}>
+            <Select size="small" style={{ width: 110 }} value={reqSource} onChange={setReqSource}
+              options={reqSources.map(s => ({
+                value: s.sourceType,
+                label: s.configured ? s.displayName : `${s.displayName}（未配置）`,
+                disabled: !s.configured,
+              }))}
+              notFoundContent="无已注册需求源" />
+            <Input size="small" placeholder="工单号，如 PROJ-123" value={reqTicket}
+              onChange={e => setReqTicket(e.target.value)} onPressEnter={fetchRequirements} />
+            <Button size="small" icon={<CloudDownloadOutlined />} loading={reqFetching}
+              onClick={fetchRequirements} disabled={!reqSource || !reqTicket.trim()}>
+              拉取需求
+            </Button>
+          </Space.Compact>
+          {reqOrigin && (
+            <Alert type="success" showIcon style={{ marginTop: 6 }}
+              message={`已从 ${reqOrigin} 拉取，按需求审查`}
+              closable onClose={() => setReqOrigin('')} />
+          )}
+
+          <Space style={{ justifyContent: 'space-between', width: '100%', margin: '8px 0' }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {requirements.length > 0 || docPath ? (docPath ? '📄 已上传需求文档' : `已添加 ${requirements.length} 条需求`) : '未填写需求，将按链路风险审查'}
             </Text>
             <Upload beforeUpload={handleFileUpload} showUploadList={false} accept=".md,.txt,.pdf">
               <Button size="small" icon={<UploadOutlined />}>{docPath ? '重新上传' : '上传文档'}</Button>
@@ -355,7 +501,7 @@ export default function ReviewPage() {
             <Empty description="暂无需求，将按当前入口链路做风险审查" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '8px 0' }} />
           )}
 
-          <Button type="primary" size="large" icon={<ThunderboltOutlined />} block onClick={startReview} loading={loading} disabled={!isReady} style={{ marginTop: 8 }}>
+          <Button type="primary" size="large" icon={<ThunderboltOutlined />} block onClick={startReview} loading={loading} disabled={!isReady} style={{ marginTop: 12 }}>
             {loading ? '审查中...' : '开始审查'}
           </Button>
         </Card>
@@ -428,66 +574,101 @@ export default function ReviewPage() {
             />
           )}
 
-          <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
-            {messages.map((msg, idx) => (
-              <div key={idx} style={{ marginBottom: 16 }}>
-                <Space style={{ marginBottom: 4 }}>
-                  {msg.role === 'assistant' ? <RobotOutlined style={{ color: '#1677ff' }} /> :
-                   msg.role === 'user' ? <UserOutlined style={{ color: '#52c41a' }} /> :
-                   msg.role === 'error' ? <WarningOutlined style={{ color: '#ff4d4f' }} /> :
-                   <InfoCircleOutlined style={{ color: '#999' }} />}
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    {msg.role === 'assistant' ? 'Review Agent' : msg.role === 'user' ? '你' : msg.role === 'error' ? '错误' : '系统'}
-                    {' · '} {msg.timestamp.toLocaleTimeString()}
-                  </Text>
-                </Space>
-                <div style={{ paddingLeft: 24 }}>
-                  {msg.role === 'error' && <Alert type="error" message={msg.content} showIcon />}
-                  {msg.role !== 'assistant' && msg.role !== 'error' && <Text>{msg.content}</Text>}
-
-                  {msg.data && (
-                    <div>
-                      <Alert type={msg.data.summary.failed > 0 ? 'warning' : 'success'} showIcon
-                        message={<Space>
-                          <Text strong>审查摘要</Text>
-                          <Tag color={msg.data.reviewMode === 'RISK_BASED' ? 'gold' : 'blue'}>
-                            {msg.data.reviewMode === 'RISK_BASED' ? '无需求风险审查' : '按需求审查'}
-                          </Tag>
-                          {msg.data.reviewMode !== 'RISK_BASED' && <Tag color="green">通过 {msg.data.summary.passed}/{msg.data.summary.totalRequirements}</Tag>}
-                          {msg.data.reviewMode !== 'RISK_BASED' && msg.data.summary.failed > 0 && <Tag color="red">失败 {msg.data.summary.failed}</Tag>}
-                          {msg.data.reviewMode !== 'RISK_BASED' && msg.data.summary.uncertain > 0 && <Tag color="orange">待确认 {msg.data.summary.uncertain}</Tag>}
-                          {msg.data.reviewMode === 'RISK_BASED' && <Tag color="orange">风险 {msg.data.issues?.length ?? 0}</Tag>}
-                          <Tag color={severityColor[msg.data.summary.highestSeverity]}>最高风险: {msg.data.summary.highestSeverity}</Tag>
-                        </Space>}
-                        style={{ marginBottom: 12 }}
-                      />
-                      {msg.data.requirementChecks?.length > 0 && (
-                        <Collapse ghost defaultActiveKey={['checks']} style={{ marginBottom: 12 }}>
-                          <Panel header={`需求检查 (${msg.data.requirementChecks.length})`} key="checks">
-                            {msg.data.requirementChecks.map(renderCheck)}
-                          </Panel>
-                        </Collapse>
-                      )}
-                      {msg.data.issues?.length > 0 && (
-                        <Collapse ghost defaultActiveKey={['issues']}>
-                          <Panel header={`代码问题 (${msg.data.issues.length})`} key="issues">
-                            {msg.data.issues.map(renderIssue)}
-                          </Panel>
-                        </Collapse>
-                      )}
-                      <div style={{ marginTop: 12, fontSize: 12, color: '#999' }}>
-                        <Space split={<Divider type="vertical" />}>
-                          <span>会话: {msg.data.sessionId}</span>
-                          <span>涉及: {msg.data.involvedClasses} 类 / {msg.data.totalMethods} 方法</span>
-                          {msg.data.truncated && <Tag color="orange">已截断</Tag>}
-                        </Space>
-                      </div>
+          <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
+            {messages.map((msg, idx) => {
+              const isAssistant = msg.role === 'assistant';
+              const avatarStyle = isAssistant ? { background: 'linear-gradient(135deg, #1677ff, #69b1ff)' }
+                : msg.role === 'user' ? { background: 'linear-gradient(135deg, #52c41a, #95de64)' }
+                : msg.role === 'error' ? { background: '#ff4d4f' }
+                : { background: '#8c8c8c' };
+              const avatarIcon = isAssistant ? <RobotOutlined />
+                : msg.role === 'user' ? <UserOutlined />
+                : msg.role === 'error' ? <WarningOutlined />
+                : <InfoCircleOutlined />;
+              const roleLabel = isAssistant ? 'Review Agent' : msg.role === 'user' ? '你' : msg.role === 'error' ? '错误' : '系统';
+              return (
+                <div key={idx} className="chat-message">
+                  <div className="chat-avatar" style={avatarStyle}>{avatarIcon}</div>
+                  <div className={`chat-bubble ${msg.role}`}>
+                    <div className="chat-meta">
+                      <span style={{ fontWeight: 500, color: 'rgba(0,0,0,0.65)' }}>{roleLabel}</span>
+                      <span>{msg.timestamp.toLocaleTimeString()}</span>
                     </div>
-                  )}
+                    {msg.role === 'error' && <Alert type="error" message={msg.content} showIcon style={{ marginBottom: msg.data ? 12 : 0 }} />}
+                    {msg.role !== 'assistant' && msg.role !== 'error' && <Text>{msg.content}</Text>}
+
+                    {msg.data && (
+                      <div>
+                        <Alert type={msg.data.summary.failed > 0 ? 'warning' : 'success'} showIcon
+                          message={<Space wrap>
+                            <Text strong>审查摘要</Text>
+                            <Tag color={msg.data.reviewMode === 'RISK_BASED' ? 'gold' : 'blue'}>
+                              {msg.data.reviewMode === 'RISK_BASED' ? '无需求风险审查' : '按需求审查'}
+                            </Tag>
+                            {msg.data.reviewMode !== 'RISK_BASED' && <Tag color="green">通过 {msg.data.summary.passed}/{msg.data.summary.totalRequirements}</Tag>}
+                            {msg.data.reviewMode !== 'RISK_BASED' && msg.data.summary.failed > 0 && <Tag color="red">失败 {msg.data.summary.failed}</Tag>}
+                            {msg.data.reviewMode !== 'RISK_BASED' && msg.data.summary.uncertain > 0 && <Tag color="orange">待确认 {msg.data.summary.uncertain}</Tag>}
+                            {msg.data.reviewMode === 'RISK_BASED' && <Tag color="orange">风险 {msg.data.issues?.length ?? 0}</Tag>}
+                            <Tag color={severityColor[msg.data.summary.highestSeverity]}>最高风险: {msg.data.summary.highestSeverity}</Tag>
+                          </Space>}
+                          style={{ marginBottom: 12 }}
+                        />
+                        {msg.data.requirementChecks?.length > 0 && (
+                          <Collapse ghost defaultActiveKey={['checks']} style={{ marginBottom: 12 }}>
+                            <Panel header={`需求检查 (${msg.data.requirementChecks.length})`} key="checks">
+                              {msg.data.requirementChecks.map(renderCheck)}
+                            </Panel>
+                          </Collapse>
+                        )}
+                        {msg.data.issues?.length > 0 && (
+                          <Collapse ghost defaultActiveKey={['issues']}>
+                            <Panel header={`代码问题 (${msg.data.issues.length})`} key="issues">
+                              {msg.data.issues.map(renderIssue)}
+                            </Panel>
+                          </Collapse>
+                        )}
+                        <div style={{ marginTop: 12, fontSize: 12, color: '#999' }}>
+                          <Space split={<Divider type="vertical" />}>
+                            <span>会话: {msg.data.sessionId}</span>
+                            <span>涉及: {msg.data.involvedClasses} 类 / {msg.data.totalMethods} 方法</span>
+                            {msg.data.truncated && <Tag color="orange">已截断</Tag>}
+                          </Space>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             <div ref={chatEndRef} />
+          </div>
+
+          {/* 追问输入区：结构化审查完成后激活（混合形态的对话层） */}
+          <div style={{ borderTop: '1px solid #f0f0f0', padding: '10px 16px', background: '#fafafa' }}>
+            <Input.TextArea
+              ref={chatInputRef}
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onPressEnter={(e) => { if (!e.shiftKey) { e.preventDefault(); sendChat(); } }}
+              placeholder={lastReviewRef.current ? '基于本次审查追问，如：详细解释第二个风险的影响路径？Enter 发送，Shift+Enter 换行' : '完成一次审查后可在此追问'}
+              autoSize={{ minRows: 1, maxRows: 4 }}
+              disabled={!canChat}
+            />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {chatThreadId ? `追问线程 ${chatThreadId}` : '首条追问将开启新线程'}
+              </Text>
+              <Button
+                type="primary"
+                size="small"
+                icon={<SendOutlined />}
+                loading={chatLoading}
+                disabled={!canChat || !chatInput.trim()}
+                onClick={() => sendChat()}
+              >
+                追问
+              </Button>
+            </div>
           </div>
 
           {historyFindings.length > 0 && (

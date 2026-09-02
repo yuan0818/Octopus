@@ -4,7 +4,7 @@ import io.yuan.octopus.dto.response.EndpointDTO;
 import io.yuan.octopus.dto.response.EntryPointDTO;
 import io.yuan.octopus.entity.AnnotationInfo;
 import io.yuan.octopus.entity.ClassInfo;
-import io.yuan.octopus.entity.JavaProjectEntity;
+import io.yuan.octopus.entity.AnalyzedProjectEntity;
 import io.yuan.octopus.entity.MethodInfo;
 import io.yuan.octopus.repository.AnnotationInfoRepository;
 import io.yuan.octopus.repository.ClassDependencyRepository;
@@ -12,7 +12,7 @@ import io.yuan.octopus.repository.ClassInfoRepository;
 import io.yuan.octopus.repository.ClassInterfaceRelationRepository;
 import io.yuan.octopus.repository.FieldInfoRepository;
 import io.yuan.octopus.repository.InheritanceRelationRepository;
-import io.yuan.octopus.repository.JavaProjectRepository;
+import io.yuan.octopus.repository.AnalyzedProjectRepository;
 import io.yuan.octopus.repository.MethodInfoRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -59,7 +59,11 @@ class QueryServiceTest {
     @Mock
     private ClassInterfaceRelationRepository classInterfaceRelationRepository;
     @Mock
-    private JavaProjectRepository javaProjectRepository;
+    private AnalyzedProjectRepository javaProjectRepository;
+    @Mock
+    private GitService gitService;
+    @Mock
+    private RepoConfigService repoConfigService;
     @Mock
     private Session session;
     @Mock
@@ -78,7 +82,9 @@ class QueryServiceTest {
                 inheritanceRelationRepository,
                 classDependencyRepository,
                 classInterfaceRelationRepository,
-                javaProjectRepository
+                javaProjectRepository,
+                gitService,
+                repoConfigService
         );
     }
 
@@ -89,18 +95,21 @@ class QueryServiceTest {
                 .projectId(100L)
                 .qualifiedName("com.example.OrderController")
                 .simpleName("OrderController")
+                .isHead(true)
                 .build();
         ClassInfo schedulerClass = ClassInfo.builder()
                 .id(2L)
                 .projectId(100L)
                 .qualifiedName("com.example.CleanupJob")
                 .simpleName("CleanupJob")
+                .isHead(true)
                 .build();
         ClassInfo listenerClass = ClassInfo.builder()
                 .id(3L)
                 .projectId(100L)
                 .qualifiedName("com.example.ReportConsumer")
                 .simpleName("ReportConsumer")
+                .isHead(true)
                 .build();
         MethodInfo endpointMethod = MethodInfo.builder()
                 .id(11L)
@@ -123,14 +132,14 @@ class QueryServiceTest {
                 .methodSignature("com.example.ReportConsumer.consume():void")
                 .returnType("void")
                 .build();
-        JavaProjectEntity project = JavaProjectEntity.builder()
+        AnalyzedProjectEntity project = AnalyzedProjectEntity.builder()
                 .id(100L)
                 .projectName("order-service")
                 .branch("main")
                 .commitId("abc123")
                 .build();
 
-        when(classInfoRepository.findAll()).thenReturn(List.of(controllerClass, schedulerClass, listenerClass));
+        when(classInfoRepository.findByIsHeadTrue()).thenReturn(List.of(controllerClass, schedulerClass, listenerClass));
         when(methodInfoRepository.findByClassInfoIdIn(anyList())).thenReturn(List.of(endpointMethod, scheduledMethod, listenerMethod));
         when(annotationInfoRepository.findByAnnotationNameInAndTargetTypeAndTargetIdIn(
                 eq(List.of("RequestMapping")), eq("CLASS"), anyList()))
@@ -142,7 +151,7 @@ class QueryServiceTest {
                         .build()));
         when(javaProjectRepository.findAllById(any())).thenReturn(List.of(project));
         when(annotationInfoRepository.findByAnnotationNameInAndTargetTypeAndTargetIdIn(
-                eq(List.of("GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping", "RequestMapping")),
+                eq(List.of("GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping", "RequestMapping", "HttpRoute")),
                 eq("METHOD"),
                 anyList()))
                 .thenReturn(List.of(AnnotationInfo.builder()
@@ -172,11 +181,9 @@ class QueryServiceTest {
                         .targetId(22L)
                         .build()));
 
-        when(neo4jDriver.session()).thenReturn(session);
-        when(session.run(anyString(), anyMap())).thenReturn(result);
-        when(result.hasNext()).thenReturn(false);
+        // getEntryPoints 走 MySQL 路径，不涉及 Neo4j，无需 stub neo4jDriver
 
-        List<EntryPointDTO> entryPoints = queryService.getEntryPoints(null, null);
+        List<EntryPointDTO> entryPoints = queryService.getEntryPoints(null, null, null, null);
 
         assertEquals(3, entryPoints.size());
         assertEquals("HTTP_API", entryPoints.get(0).entryType());
@@ -195,6 +202,7 @@ class QueryServiceTest {
                 .projectId(100L)
                 .qualifiedName("com.example.OrderController")
                 .simpleName("OrderController")
+                .isHead(true)
                 .build();
         MethodInfo endpointMethod = MethodInfo.builder()
                 .id(11L)
@@ -204,7 +212,7 @@ class QueryServiceTest {
                 .returnType("Order")
                 .build();
 
-        when(classInfoRepository.findAll()).thenReturn(List.of(controllerClass));
+        when(classInfoRepository.findByIsHeadTrue()).thenReturn(List.of(controllerClass));
         when(methodInfoRepository.findByClassInfoIdIn(anyList())).thenReturn(List.of(endpointMethod));
         when(annotationInfoRepository.findByAnnotationNameInAndTargetTypeAndTargetIdIn(
                 eq(List.of("RequestMapping")), eq("CLASS"), anyList()))
@@ -216,7 +224,7 @@ class QueryServiceTest {
                         .build()));
         when(javaProjectRepository.findAllById(any())).thenReturn(List.of());
         when(annotationInfoRepository.findByAnnotationNameInAndTargetTypeAndTargetIdIn(
-                eq(List.of("GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping", "RequestMapping")),
+                eq(List.of("GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping", "RequestMapping", "HttpRoute")),
                 eq("METHOD"),
                 anyList()))
                 .thenReturn(List.of(AnnotationInfo.builder()
@@ -226,7 +234,7 @@ class QueryServiceTest {
                         .targetId(11L)
                         .build()));
 
-        List<EndpointDTO> endpoints = queryService.getEndpoints(null);
+        List<EndpointDTO> endpoints = queryService.getEndpoints(null, null, null);
 
         assertEquals(1, endpoints.size());
         assertEquals("GET", endpoints.get(0).httpMethod());
@@ -236,7 +244,7 @@ class QueryServiceTest {
 
     @Test
     void shouldIncludeRootMethodsWhenRequested() {
-        when(classInfoRepository.findAll()).thenReturn(List.of());
+        when(classInfoRepository.findByIsHeadTrue()).thenReturn(List.of());
         when(neo4jDriver.session()).thenReturn(session);
         when(session.run(anyString(), anyMap())).thenReturn(result);
 
@@ -255,7 +263,7 @@ class QueryServiceTest {
         when(result.hasNext()).thenReturn(true, false);
         when(result.next()).thenReturn(record);
 
-        List<EntryPointDTO> entryPoints = queryService.getEntryPoints(null, "ROOT_METHOD");
+        List<EntryPointDTO> entryPoints = queryService.getEntryPoints(null, "ROOT_METHOD", null, null);
 
         assertEquals(1, entryPoints.size());
         assertEquals("ROOT_METHOD", entryPoints.get(0).entryType());
@@ -271,5 +279,131 @@ class QueryServiceTest {
             return properties.containsKey(key) ? Values.value(properties.get(key)) : Values.NULL;
         });
         return node;
+    }
+
+    // ── 版本化查询测试 ────────────────────────────────────────────
+
+    @Test
+    void shouldGetEndpointsWithBranchAndCommitId() {
+        ClassInfo controllerClass = ClassInfo.builder()
+                .id(1L).projectId(100L)
+                .qualifiedName("com.example.OrderController")
+                .simpleName("OrderController")
+                .branch("main").commitId("abc123").isHead(false)
+                .build();
+        MethodInfo endpointMethod = MethodInfo.builder()
+                .id(11L).classInfo(controllerClass)
+                .methodName("getOrder")
+                .methodSignature("com.example.OrderController.getOrder(java.lang.String):Order")
+                .returnType("Order")
+                .commitId("abc123").isHead(false)
+                .build();
+        AnalyzedProjectEntity project = AnalyzedProjectEntity.builder()
+                .id(100L).projectName("order-service")
+                .branch("main").commitId("abc123")
+                .build();
+
+        when(classInfoRepository.findByProjectIdAndBranchAndCommitId(100L, "main", "abc123"))
+                .thenReturn(List.of(controllerClass));
+        when(methodInfoRepository.findByClassInfoIdIn(anyList())).thenReturn(List.of(endpointMethod));
+        when(annotationInfoRepository.findByAnnotationNameInAndTargetTypeAndTargetIdIn(
+                eq(List.of("RequestMapping")), eq("CLASS"), anyList()))
+                .thenReturn(List.of());
+        when(javaProjectRepository.findAllById(any())).thenReturn(List.of(project));
+        when(annotationInfoRepository.findByAnnotationNameInAndTargetTypeAndTargetIdIn(
+                eq(List.of("GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping", "RequestMapping", "HttpRoute")),
+                eq("METHOD"), anyList()))
+                .thenReturn(List.of(AnnotationInfo.builder()
+                        .annotationName("GetMapping")
+                        .annotationParams("{\"value\":\"\\\"/{id}\\\"\"}")
+                        .targetType("METHOD")
+                        .targetId(11L)
+                        .build()));
+
+        List<EndpointDTO> endpoints = queryService.getEndpoints(100L, "main", "abc123");
+
+        assertEquals(1, endpoints.size());
+        assertEquals("GET", endpoints.get(0).httpMethod());
+    }
+
+    @Test
+    void shouldGetEndpointsWithIsHeadDefault() {
+        ClassInfo controllerClass = ClassInfo.builder()
+                .id(1L).projectId(100L)
+                .qualifiedName("com.example.OrderController")
+                .simpleName("OrderController")
+                .isHead(true)
+                .build();
+        MethodInfo endpointMethod = MethodInfo.builder()
+                .id(11L).classInfo(controllerClass)
+                .methodName("getOrder")
+                .methodSignature("com.example.OrderController.getOrder(java.lang.String):Order")
+                .returnType("Order")
+                .build();
+
+        when(classInfoRepository.findByProjectIdAndIsHeadTrue(100L))
+                .thenReturn(List.of(controllerClass));
+        when(methodInfoRepository.findByClassInfoIdIn(anyList())).thenReturn(List.of(endpointMethod));
+        when(annotationInfoRepository.findByAnnotationNameInAndTargetTypeAndTargetIdIn(
+                eq(List.of("RequestMapping")), eq("CLASS"), anyList()))
+                .thenReturn(List.of());
+        when(javaProjectRepository.findAllById(any())).thenReturn(List.of());
+        when(annotationInfoRepository.findByAnnotationNameInAndTargetTypeAndTargetIdIn(
+                eq(List.of("GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping", "RequestMapping", "HttpRoute")),
+                eq("METHOD"), anyList()))
+                .thenReturn(List.of(AnnotationInfo.builder()
+                        .annotationName("GetMapping")
+                        .annotationParams("{\"value\":\"\\\"/orders\\\"\"}")
+                        .targetType("METHOD")
+                        .targetId(11L)
+                        .build()));
+
+        // 不传 commitId → 走 isHead 路径
+        List<EndpointDTO> endpoints = queryService.getEndpoints(100L, null, null);
+
+        assertEquals(1, endpoints.size());
+        assertEquals("/orders", endpoints.get(0).path());
+    }
+
+    @Test
+    void shouldGetEntryPointsWithCommitIdFilter() {
+        ClassInfo controllerClass = ClassInfo.builder()
+                .id(1L).projectId(100L)
+                .qualifiedName("com.example.OrderController")
+                .simpleName("OrderController")
+                .commitId("v1").isHead(false)
+                .build();
+        MethodInfo endpointMethod = MethodInfo.builder()
+                .id(11L).classInfo(controllerClass)
+                .methodName("getOrder")
+                .methodSignature("com.example.OrderController.getOrder(java.lang.String):Order")
+                .returnType("Order")
+                .build();
+        AnalyzedProjectEntity project = AnalyzedProjectEntity.builder()
+                .id(100L).projectName("order-service")
+                .branch("main").commitId("v1")
+                .build();
+
+        when(classInfoRepository.findByProjectIdAndCommitId(100L, "v1"))
+                .thenReturn(List.of(controllerClass));
+        when(methodInfoRepository.findByClassInfoIdIn(anyList())).thenReturn(List.of(endpointMethod));
+        when(annotationInfoRepository.findByAnnotationNameInAndTargetTypeAndTargetIdIn(
+                eq(List.of("RequestMapping")), eq("CLASS"), anyList()))
+                .thenReturn(List.of());
+        when(javaProjectRepository.findAllById(any())).thenReturn(List.of(project));
+        when(annotationInfoRepository.findByAnnotationNameInAndTargetTypeAndTargetIdIn(
+                eq(List.of("GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping", "RequestMapping", "HttpRoute")),
+                eq("METHOD"), anyList()))
+                .thenReturn(List.of(AnnotationInfo.builder()
+                        .annotationName("GetMapping")
+                        .annotationParams("{\"value\":\"\\\"/{id}\\\"\"}")
+                        .targetType("METHOD")
+                        .targetId(11L)
+                        .build()));
+
+        List<EntryPointDTO> entries = queryService.getEntryPoints(100L, "HTTP_API", null, "v1");
+
+        assertEquals(1, entries.size());
+        assertEquals("HTTP_API", entries.get(0).entryType());
     }
 }

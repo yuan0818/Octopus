@@ -3,6 +3,7 @@ package io.yuan.octopus.review.dto;
 public class LLMConfig {
 
     private String provider;  // null means "use skill's preferred provider"
+    private String apiFormat; // 报文格式：openai（兼容）/ claude；空则按 provider 推断
     private String model;
     private Integer maxTokens = 128000;
     private Double temperature = 0.3;
@@ -26,4 +27,7 @@ public class LLMConfig {
 
     public String getApiUrl() { return apiUrl; }
     public void setApiUrl(String apiUrl) { this.apiUrl = apiUrl; }
+
+    public String getApiFormat() { return apiFormat; }
+    public void setApiFormat(String apiFormat) { this.apiFormat = apiFormat; }
 }

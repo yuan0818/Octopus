@@ -4,12 +4,15 @@ import io.yuan.octopus.dto.request.SourcePathRequest;
 import io.yuan.octopus.dto.response.CodePathDTO;
 import io.yuan.octopus.dto.response.CodePathDTO.CodePathStepDTO;
 import io.yuan.octopus.dto.response.EndpointDiffPathsDTO;
+import io.yuan.octopus.dto.response.EntryChainDiffDTO;
+import io.yuan.octopus.dto.response.EntryChainDiffDTO.ChangedMethod;
+import io.yuan.octopus.dto.response.EntryChainDiffDTO.MethodRef;
 import io.yuan.octopus.dto.response.ImpactPathsDTO;
 import io.yuan.octopus.dto.response.MethodNodeDTO;
 import io.yuan.octopus.dto.response.SourcePathDTO;
 import io.yuan.octopus.exception.ResourceNotFoundException;
 import io.yuan.octopus.exception.ValidationException;
-import io.yuan.octopus.repository.JavaProjectRepository;
+import io.yuan.octopus.repository.AnalyzedProjectRepository;
 import org.neo4j.driver.Driver;
 import org.neo4j.driver.Record;
 import org.neo4j.driver.Result;
@@ -37,11 +40,243 @@ public class PathQueryService {
     private static final int MAX_PATHS = 2000;
 
     private final Driver neo4jDriver;
-    private final JavaProjectRepository javaProjectRepository;
+    private final AnalyzedProjectRepository javaProjectRepository;
+    private final GitMethodSourceClient gitSourceClient;
+    private final io.yuan.octopus.repository.ClassInfoRepository classInfoRepository;
+    private final io.yuan.octopus.repository.MethodInfoRepository methodInfoRepository;
 
-    public PathQueryService(Driver neo4jDriver, JavaProjectRepository javaProjectRepository) {
+    /** 链路成员 diff 的安全上限：超过则截断并置 truncated 标志。 */
+    private static final int MAX_CHAIN_MEMBERS = 3000;
+
+    public PathQueryService(Driver neo4jDriver, AnalyzedProjectRepository javaProjectRepository,
+                            GitMethodSourceClient gitSourceClient,
+                            io.yuan.octopus.repository.ClassInfoRepository classInfoRepository,
+                            io.yuan.octopus.repository.MethodInfoRepository methodInfoRepository) {
         this.neo4jDriver = neo4jDriver;
         this.javaProjectRepository = javaProjectRepository;
+        this.gitSourceClient = gitSourceClient;
+        this.classInfoRepository = classInfoRepository;
+        this.methodInfoRepository = methodInfoRepository;
+    }
+
+    // -------------------------------------------------------------------------
+    // Entry-chain version diff (L1: chain members + source comparison)
+    // -------------------------------------------------------------------------
+
+    /**
+     * 枚举同一入口在两个版本（(branch, commitId) 对）的下游链路成员集合，
+     * 输出新增/移除/源码变更的方法。
+     * <p>
+     * 源码文本按 git-only 原则获取：以 method_info 中的坐标
+     * （file_path + line_start/line_end）经 code-reconstruct 从该 commit 的
+     * git blob 切片；git 不可达（无 git 的本地项目 / 服务不可用）时回退
+     * MethodNode 上分析时的 sourceCode 快照，并以 gitBacked=false 标注。
+     * <p>
+     * 入口在某一版本不存在时，该版本成员集合为空（整个链路表现为
+     * added/removed），两个版本都不存在才报错。
+     */
+    public EntryChainDiffDTO getEntryChainDiff(Long projectId, String className, String methodName,
+                                               String fromBranch, String fromCommitId,
+                                               String toBranch, String toCommitId,
+                                               Integer maxDepth) {
+        if (className == null || className.isBlank() || methodName == null || methodName.isBlank()) {
+            throw new ValidationException("className and methodName must not be blank");
+        }
+        int depthLimit = normalizeMaxDepth(maxDepth);
+
+        ChainMembers from = collectChainMembers(projectId, className, methodName, fromBranch, fromCommitId, depthLimit);
+        ChainMembers to = collectChainMembers(projectId, className, methodName, toBranch, toCommitId, depthLimit);
+        if (from.members().isEmpty() && to.members().isEmpty()) {
+            throw new ResourceNotFoundException(
+                    "Entry not found in either version: " + className + "#" + methodName);
+        }
+
+        List<MethodRef> added = to.members().keySet().stream()
+                .filter(sig -> !from.members().containsKey(sig))
+                .map(sig -> to.members().get(sig).toRef())
+                .toList();
+        List<MethodRef> removed = from.members().keySet().stream()
+                .filter(sig -> !to.members().containsKey(sig))
+                .map(sig -> from.members().get(sig).toRef())
+                .toList();
+
+        // 共同成员：git 文本优先，快照回退
+        Map<String, String> fromGit = gitTexts(projectId, fromBranch, fromCommitId, from);
+        Map<String, String> toGit = gitTexts(projectId, toBranch, toCommitId, to);
+        boolean gitBacked = !fromGit.isEmpty() || !toGit.isEmpty();
+
+        List<ChangedMethod> changed = new ArrayList<>();
+        int unchanged = 0;
+        for (Map.Entry<String, ChainMember> entry : to.members().entrySet()) {
+            ChainMember fromMember = from.members().get(entry.getKey());
+            if (fromMember == null) {
+                continue;
+            }
+            String fromText = firstNonNull(fromGit.get(entry.getKey()), fromMember.sourceCode());
+            String toText = firstNonNull(toGit.get(entry.getKey()), entry.getValue().sourceCode());
+            if (java.util.Objects.equals(fromText, toText)) {
+                unchanged++;
+            } else {
+                changed.add(new ChangedMethod(entry.getValue().toRef(), fromText, toText));
+            }
+        }
+
+        MethodRef anchor = to.anchor() != null ? to.anchor() : from.anchor();
+        return new EntryChainDiffDTO(
+                anchor,
+                new EntryChainDiffDTO.VersionRef(fromBranch, blankToNull(fromCommitId)),
+                new EntryChainDiffDTO.VersionRef(toBranch, blankToNull(toCommitId)),
+                added, removed, changed, unchanged,
+                from.truncated() || to.truncated(),
+                gitBacked);
+    }
+
+    /** 从 method_info 坐标批量取 git 文本；无坐标/不可达的条目缺省为 null。 */
+    private Map<String, String> gitTexts(Long projectId, String branch, String commitId, ChainMembers members) {
+        Map<String, String> out = new LinkedHashMap<>();
+        List<String> signatures = new ArrayList<>();
+        List<GitMethodSourceClient.SourceItem> items = new ArrayList<>();
+        List<String> commitIds = new ArrayList<>();
+        for (ChainMember member : members.members().values()) {
+            MethodCoordinate coord = findCoordinate(projectId, branch, commitId,
+                    member.qualifiedClassName(), member.signature());
+            if (coord == null) {
+                continue;
+            }
+            signatures.add(member.signature());
+            items.add(new GitMethodSourceClient.SourceItem(coord.filePath(), coord.lineStart(), coord.lineEnd()));
+            commitIds.add(coord.commitId());
+        }
+        if (items.isEmpty()) {
+            return out;
+        }
+        // 同一 commit 聚批（链路成员通常同版本）
+        Map<String, List<Integer>> byCommit = new LinkedHashMap<>();
+        for (int i = 0; i < commitIds.size(); i++) {
+            byCommit.computeIfAbsent(commitIds.get(i), k -> new ArrayList<>()).add(i);
+        }
+        for (Map.Entry<String, List<Integer>> batch : byCommit.entrySet()) {
+            List<GitMethodSourceClient.SourceItem> batchItems = batch.getValue().stream().map(items::get).toList();
+            List<String> texts = gitSourceClient.fetchBatch(projectId, batch.getKey(), batchItems);
+            if (texts == null) {
+                continue;
+            }
+            List<Integer> indexes = batch.getValue();
+            for (int i = 0; i < indexes.size() && i < texts.size(); i++) {
+                if (texts.get(i) != null) {
+                    out.put(signatures.get(indexes.get(i)), texts.get(i));
+                }
+            }
+        }
+        return out;
+    }
+
+    private record MethodCoordinate(String filePath, int lineStart, int lineEnd, String commitId) {}
+
+    /**
+     * 类行（版本感知：commitId 非空按 commit 精确匹配；为空按 branch 的 HEAD 行，
+     * 多分支并存时各分支各有 HEAD 行，必须按 branch 过滤）→ 方法坐标。
+     * 找不到返回 null（消费方回退快照）。
+     */
+    private MethodCoordinate findCoordinate(Long projectId, String branch, String commitId,
+                                            String qualifiedName, String signature) {
+        List<io.yuan.octopus.entity.ClassInfo> classes;
+        if (commitId != null && !commitId.isBlank()) {
+            classes = classInfoRepository.findByProjectIdAndQualifiedNameAndCommitId(projectId, qualifiedName, commitId);
+        } else {
+            classes = classInfoRepository
+                    .findByProjectIdAndQualifiedNameAndIsHeadTrue(projectId, qualifiedName).stream()
+                    .filter(c -> branch == null || branch.isBlank() || branch.equals(c.getBranch()))
+                    .toList();
+        }
+        io.yuan.octopus.entity.ClassInfo match = classes.stream().findFirst().orElse(null);
+        if (match == null) {
+            return null;
+        }
+        return methodInfoRepository.findByClassInfoIdAndMethodSignature(match.getId(), signature)
+                .filter(m -> m.getLineStart() != null && m.getLineStart() > 0
+                        && m.getFilePath() != null && !m.getFilePath().isBlank())
+                .map(m -> new MethodCoordinate(m.getFilePath(), m.getLineStart(),
+                        m.getLineEnd() != null ? m.getLineEnd() : m.getLineStart(),
+                        match.getCommitId()))
+                .orElse(null);
+    }
+
+    private static String firstNonNull(String a, String b) {
+        return a != null ? a : b;
+    }
+
+    private record ChainMember(String signature, String qualifiedClassName, String methodName, String sourceCode) {
+        MethodRef toRef() {
+            return new MethodRef(signature, qualifiedClassName, methodName);
+        }
+    }
+
+    private record ChainMembers(Map<String, ChainMember> members, MethodRef anchor, boolean truncated) {}
+
+    /**
+     * 收集入口在指定版本的下游可达成员（含入口自身），版本过滤逐节点应用
+     * （与 getCallChain 一致：commitId 为空取 current=true 的 HEAD 快照）。
+     */
+    private ChainMembers collectChainMembers(Long projectId, String className, String methodName,
+                                             String branch, String commitId, int depthLimit) {
+        String versionFilter = nodeVersionFilter("n");
+        String cypher = """
+                MATCH (start:MethodNode)
+                WHERE start.qualifiedClassName = $className
+                  AND start.methodName = $methodName
+                  AND %s
+                WITH DISTINCT start LIMIT 1
+                MATCH path = (start)-[:CALLS*0..%d]->(m:MethodNode)
+                WHERE ALL(n IN nodes(path) WHERE %s)
+                  AND ALL(r IN relationships(path) WHERE coalesce(r.callType, 'DIRECT') <> 'SPRING_DI')
+                RETURN DISTINCT m
+                """.formatted(nodeVersionFilter("start"), depthLimit, versionFilter);
+
+        Map<String, Object> params = scopeParameters(branch, commitId);
+        params.put("projectId", projectId != null ? projectId : -1L);
+        params.put("className", className);
+        params.put("methodName", methodName);
+
+        Map<String, ChainMember> members = new LinkedHashMap<>();
+        MethodRef anchor = null;
+        try (Session session = neo4jDriver.session()) {
+            Result result = session.run(cypher, params);
+            while (result.hasNext()) {
+                Node node = result.next().get("m").asNode();
+                ChainMember member = new ChainMember(
+                        stringProperty(node, "signature", null),
+                        stringProperty(node, "qualifiedClassName", null),
+                        stringProperty(node, "methodName", null),
+                        stringProperty(node, "sourceCode", null));
+                if (member.signature() == null) {
+                    continue;
+                }
+                if (anchor == null && member.qualifiedClassName() != null
+                        && member.qualifiedClassName().equals(className)
+                        && methodName.equals(member.methodName())) {
+                    anchor = member.toRef();
+                }
+                members.putIfAbsent(member.signature(), member);
+                if (members.size() > MAX_CHAIN_MEMBERS) {
+                    return new ChainMembers(members, anchor, true);
+                }
+            }
+        }
+        return new ChainMembers(members, anchor, false);
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s;
+    }
+
+    /** 逐节点版本过滤谓词（与 getCallChain 的 branch/version 语义一致）。 */
+    private static String nodeVersionFilter(String var) {
+        return """
+                ($projectId = -1 OR %s.projectId = $projectId)
+                AND ($branch = '' OR %s.branch = $branch)
+                AND (($commitId = '' AND coalesce(%s.current, true) = true)
+                     OR ($commitId <> '' AND %s.commitId = $commitId))""".formatted(var, var, var, var);
     }
 
     public ImpactPathsDTO getImpactPaths(String signature, Long projectId, String branch,

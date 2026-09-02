@@ -1,8 +1,10 @@
 package io.yuan.octopus.review.controller;
 
 import io.yuan.octopus.infra.common.Result;
+import io.yuan.octopus.review.dto.ChatRequest;
 import io.yuan.octopus.review.dto.ReviewRequest;
 import io.yuan.octopus.review.dto.ReviewResponse;
+import io.yuan.octopus.review.service.ReviewChatService;
 import io.yuan.octopus.review.service.ReviewOrchestrator;
 import io.yuan.octopus.review.service.ReviewOrchestrator.ReviewPreview;
 import io.yuan.octopus.review.service.ReviewOrchestrator.ReviewSessionStatus;
@@ -30,9 +32,39 @@ public class ReviewController {
     private static final Path UPLOAD_DIR = Path.of("/tmp/octopus/upload");
 
     private final ReviewOrchestrator orchestrator;
+    private final ReviewChatService chatService;
 
-    public ReviewController(ReviewOrchestrator orchestrator) {
+    public ReviewController(ReviewOrchestrator orchestrator, ReviewChatService chatService) {
         this.orchestrator = orchestrator;
+        this.chatService = chatService;
+    }
+
+    /**
+     * 审查追问（混合形态 review 的对话层）：首轮结构化审查完成后，
+     * 基于同一链路上下文继续提问，免 schema 校验，消息按 threadId 落库。
+     */
+    @PostMapping("/review/chat")
+    public Result<ReviewChatService.ChatResult> chat(@Valid @RequestBody ChatRequest request) {
+        try {
+            return Result.success(chatService.chat(request));
+        } catch (IllegalArgumentException e) {
+            // 配置类错误（未注册模型等）返回 400 语义而非 500
+            return Result.error(400, e.getMessage());
+        }
+    }
+
+    /** 追问历史（刷新恢复用）。 */
+    @GetMapping("/review/chat/{threadId}")
+    public Result<List<Map<String, Object>>> chatHistory(@PathVariable String threadId) {
+        return Result.success(chatService.history(threadId).stream()
+                .map(m -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("role", m.getRole());
+                    row.put("content", m.getContent());
+                    row.put("createdAt", m.getCreatedAt() != null ? m.getCreatedAt().toString() : null);
+                    return row;
+                })
+                .collect(Collectors.toList()));
     }
 
     /**

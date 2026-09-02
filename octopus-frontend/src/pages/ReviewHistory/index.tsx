@@ -10,6 +10,8 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { reviewApi } from '../../api/review';
 import { queryApi } from '../../api/query';
+import { useBranchCommit } from '../../components/BranchCommitContext';
+import BranchCommitInlineSelector from '../../components/BranchCommitInlineSelector';
 import type { ReviewResponse, RequirementCheck, CodeIssue } from '../../types';
 
 const { Text, Paragraph, Title } = Typography;
@@ -25,6 +27,7 @@ const statusColor: Record<string, string> = {
 
 export default function ReviewHistoryPage() {
   const { message } = App.useApp();
+  const { branch, commitId, setBranch, setCommitId } = useBranchCommit();
   const [projects, setProjects] = useState<any[]>([]);
   const [projectId, setProjectId] = useState<string>();
   const [statusFilter, setStatusFilter] = useState<string>();
@@ -52,15 +55,17 @@ export default function ReviewHistoryPage() {
 
   useEffect(() => {
     if (!projectId) { setClasses([]); setSelectedClassId(undefined); setSelectedClassName(undefined); setMethods([]); setSelectedMethod(undefined); return; }
-    reviewApi.listClasses(Number(projectId)).then(d => setClasses(Array.isArray(d) ? d : [])).catch(() => setClasses([]));
+    reviewApi.listClasses(Number(projectId), undefined, branch, commitId).then(d => setClasses(Array.isArray(d) ? d : [])).catch(() => setClasses([]));
     setSelectedClassId(undefined); setSelectedClassName(undefined); setMethods([]); setSelectedMethod(undefined);
-  }, [projectId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, branch, commitId]);
 
   useEffect(() => {
     if (!selectedClassId) { setMethods([]); setSelectedMethod(undefined); return; }
-    reviewApi.listMethods(selectedClassId).then(d => setMethods(Array.isArray(d) ? d : [])).catch(() => setMethods([]));
+    reviewApi.listMethods(selectedClassId, undefined, branch, commitId).then(d => setMethods(Array.isArray(d) ? d : [])).catch(() => setMethods([]));
     setSelectedMethod(undefined);
-  }, [selectedClassId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClassId, branch, commitId]);
 
   const loadSessions = () => {
     if (!projectId) return;
@@ -70,6 +75,7 @@ export default function ReviewHistoryPage() {
       anchorClass: selectedClassName || undefined,
       page,
       size: pageSize,
+      commitId,
     })
       .then(d => {
         setSessions(d.content || []);
@@ -79,7 +85,7 @@ export default function ReviewHistoryPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { loadSessions(); }, [projectId, statusFilter, selectedClassName, page, pageSize]);
+  useEffect(() => { loadSessions(); }, [projectId, statusFilter, selectedClassName, page, pageSize, branch, commitId]);
 
   const columns: ColumnsType<any> = [
     {
@@ -188,12 +194,30 @@ export default function ReviewHistoryPage() {
             style={{ width: 240 }}
             placeholder="选择项目"
             value={projectId}
-            onChange={(v) => { setProjectId(v); setPage(0); }}
+            onChange={(v) => {
+              setProjectId(v);
+              setPage(0);
+              const p = projects.find((x) => String(x.id) === v);
+              if (p) {
+                // 切项目时用项目自带 branch/commitId 作初值，避免残留上一项目的版本选择
+                setBranch(p.branch);
+                setCommitId(p.commitId);
+              }
+            }}
             showSearch
             optionFilterProp="label"
             options={projects.map(p => ({ value: String(p.id), label: `${p.projectName} [${p.branch || 'default'}]` }))}
             allowClear
             onClear={() => setProjectId(undefined)}
+          />
+          <BranchCommitInlineSelector
+            projectId={projectId ? Number(projectId) : null}
+            branch={branch}
+            commitId={commitId}
+            onBranchChange={setBranch}
+            onCommitChange={setCommitId}
+            fallbackBranch={projects.find(p => String(p.id) === projectId)?.branch}
+            fallbackCommitId={projects.find(p => String(p.id) === projectId)?.commitId}
           />
           <Select
             style={{ width: 320 }}

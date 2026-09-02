@@ -45,9 +45,10 @@ public class SkillValidator {
             }
         }
 
-        // 2. Validate provider/model
+        // 2. Validate provider/model（仅提示字段：实际模型路由由 ReviewRequest.modelName
+        //    / ModelRegistry 决定，preferredProvider 不参与运行时路由）
         if (skill.getPreferredProvider() == null || skill.getPreferredProvider().isBlank()) {
-            errors.add("preferredProvider is required");
+            warnings.add("preferredProvider 未设置（可选的展示性提示字段）");
         } else {
             var model = modelRegistry.select(skill.getPreferredProvider(), "general");
             if (model == null) {

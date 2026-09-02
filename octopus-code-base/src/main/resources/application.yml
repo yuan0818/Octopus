@@ -1,0 +1,28 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: octopus-code-base
+  datasource:
+    url: jdbc:mysql://localhost:3306/octopus?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    username: root
+    password: ${MYSQL_PASSWORD:root}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+
+codebase:
+  # 与 octopus-git / code-intelligence / code-reconstruct 的本地仓库根保持一致（/data/repos），
+  # 否则 code-base 克隆出的仓库其他服务读不到
+  local-repo-root: ${CODEBASE_REPO_ROOT:/data/repos}
+  nfs-export-enabled: ${CODEBASE_NFS_ENABLED:false}
+
+octopus:
+  encryption:
+    secret-key: ${OCTOPUS_ENCRYPTION_KEY}   # 与 code-intelligence 同密钥，平台凭证加解密互通

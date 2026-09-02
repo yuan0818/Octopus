@@ -1,0 +1,69 @@
+# 本地基础设施（MySQL / Neo4j / RabbitMQ）——与各服务 application.yaml 的默认连接配置对齐。
+#
+# 用法（Podman）：
+#   podman compose -f docker-compose.infra.yml up -d
+#   # 或 podman-compose -f docker-compose.infra.yml up -d
+#
+# 连接参数（与服务默认值一致，无需额外环境变量）：
+#   MySQL   localhost:3306  root/root      数据库 octopus（自动创建）
+#   Neo4j   bolt://localhost:7687  neo4j/octpus123   （注意密码是项目既定的 octpus123）
+#   RabbitMQ localhost:5672  guest/guest   管理台 http://localhost:15672（guest/guest）
+#
+# 跑依赖真实基础设施的测试（如 OctopusApplicationTests.contextLoads）还需两个无默认值的环境变量：
+#   GIT_PASSWORD=dummy OCTOPUS_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef ./gradlew :code-intelligence:test
+
+services:
+
+  mysql:
+    image: docker.io/library/mysql:8.0
+    container_name: octopus-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: octopus
+    ports:
+      - "3306:3306"
+    volumes:
+      - octopus-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-proot", "--silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  neo4j:
+    image: docker.io/library/neo4j:5
+    container_name: octopus-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/octpus123
+    ports:
+      - "7474:7474"   # HTTP 管理台
+      - "7687:7687"   # Bolt
+    volumes:
+      - octopus-neo4j-data:/data
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "octpus123", "RETURN 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+
+  rabbitmq:
+    image: docker.io/library/rabbitmq:3-management
+    container_name: octopus-rabbitmq
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # 管理台
+    volumes:
+      - octopus-rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  octopus-mysql-data:
+  octopus-neo4j-data:
+  octopus-rabbitmq-data:

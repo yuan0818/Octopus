@@ -24,23 +24,29 @@ public class QueryController {
     @GetMapping("/callers")
     public Result<List<MethodEdgeDTO>> getCallers(
             @RequestParam String className,
-            @RequestParam String methodName) {
-        return Result.success(queryService.getCallers(className, methodName, List.of()));
+            @RequestParam String methodName,
+            @RequestParam(required = false) String branch,
+            @RequestParam(required = false) String commitId) {
+        return Result.success(queryService.getCallers(className, methodName, List.of(), branch, commitId));
     }
 
     @GetMapping("/callees")
     public Result<List<MethodEdgeDTO>> getCallees(
             @RequestParam String className,
-            @RequestParam String methodName) {
-        return Result.success(queryService.getCallees(className, methodName, List.of()));
+            @RequestParam String methodName,
+            @RequestParam(required = false) String branch,
+            @RequestParam(required = false) String commitId) {
+        return Result.success(queryService.getCallees(className, methodName, List.of(), branch, commitId));
     }
 
     @GetMapping("/call-chain")
     public Result<CallChainDTO> getCallChain(
             @RequestParam String className,
             @RequestParam String methodName,
-            @RequestParam(defaultValue = "0") int maxDepth) {
-        return Result.success(queryService.getCallChain(className, methodName, List.of(), maxDepth));
+            @RequestParam(defaultValue = "0") int maxDepth,
+            @RequestParam(required = false) String branch,
+            @RequestParam(required = false) String commitId) {
+        return Result.success(queryService.getCallChain(className, methodName, List.of(), maxDepth, branch, commitId));
     }
 
     /**
@@ -51,8 +57,10 @@ public class QueryController {
     public Result<CallTraceDTO> traceMethod(
             @RequestParam String className,
             @RequestParam String methodName,
-            @RequestParam(defaultValue = "5") int depth) {
-        return Result.success(queryService.traceMethod(className, methodName, List.of(), depth));
+            @RequestParam(defaultValue = "5") int depth,
+            @RequestParam(required = false) String branch,
+            @RequestParam(required = false) String commitId) {
+        return Result.success(queryService.traceMethod(className, methodName, List.of(), depth, branch, commitId));
     }
 
     /**
@@ -111,8 +119,11 @@ public class QueryController {
     }
 
     @GetMapping("/classes/{qualifiedName}")
-    public Result<ClassDetailDTO> getClassDetail(@PathVariable String qualifiedName) {
-        return Result.success(queryService.getClassDetail(qualifiedName));
+    public Result<ClassDetailDTO> getClassDetail(
+            @PathVariable String qualifiedName,
+            @RequestParam(required = false) String branch,
+            @RequestParam(required = false) String commitId) {
+        return Result.success(queryService.getClassDetail(qualifiedName, commitId));
     }
 
     @GetMapping("/packages/{packageName}/classes")
@@ -133,25 +144,33 @@ public class QueryController {
     /**
      * Lists API endpoints found in the analysed code.
      *
-     * @param projectId optional filter — when supplied, only endpoints belonging to this project are returned
+     * @param projectId optional filter
+     * @param branch optional branch filter（缺省 = HEAD）
+     * @param commitId optional commit filter（缺省 = HEAD）
      */
     @GetMapping("/endpoints")
     public Result<List<EndpointDTO>> getEndpoints(
-            @RequestParam(required = false) Long projectId) {
-        return Result.success(queryService.getEndpoints(projectId));
+            @RequestParam(required = false) Long projectId,
+            @RequestParam(required = false) String branch,
+            @RequestParam(required = false) String commitId) {
+        return Result.success(queryService.getEndpoints(projectId, branch, commitId));
     }
 
     /**
      * Lists entry points found in the analysed code, with HTTP API entries ordered first by default.
      *
-     * @param projectId optional filter — when supplied, only entry points belonging to this project are returned
-     * @param type optional entry-point type filter (for example {@code HTTP_API} or {@code SCHEDULED})
+     * @param projectId optional filter
+     * @param type optional entry-point type filter
+     * @param branch optional branch filter（缺省 = HEAD）
+     * @param commitId optional commit filter（缺省 = HEAD）
      */
     @GetMapping("/entry-points")
     public Result<List<EntryPointDTO>> getEntryPoints(
             @RequestParam(required = false) Long projectId,
-            @RequestParam(required = false) String type) {
-        return Result.success(queryService.getEntryPoints(projectId, type));
+            @RequestParam(required = false) String type,
+            @RequestParam(required = false) String branch,
+            @RequestParam(required = false) String commitId) {
+        return Result.success(queryService.getEntryPoints(projectId, type, branch, commitId));
     }
 
     /**
@@ -160,6 +179,60 @@ public class QueryController {
     @GetMapping("/projects")
     public Result<List<ProjectSummaryDTO>> getProjects() {
         return Result.success(queryService.getProjects());
+    }
+
+    /**
+     * 列出某项目关联 Git 仓库的所有分支（真实 Git 分支，来自 JGit）。
+     */
+    @GetMapping("/projects/{projectId}/branches")
+    public Result<List<BranchInfo>> listBranches(@PathVariable Long projectId) {
+        return Result.success(queryService.listBranches(projectId));
+    }
+
+    /**
+     * 列出某项目某分支最近的 commit 历史（真实 Git commit，来自 JGit）。
+     */
+    @GetMapping("/projects/{projectId}/commits")
+    public Result<List<CommitInfo>> listCommits(
+            @PathVariable Long projectId,
+            @RequestParam String branch,
+            @RequestParam(defaultValue = "50") int limit) {
+        return Result.success(queryService.listCommits(projectId, branch, limit));
+    }
+
+    /**
+     * 从元数据枚举项目已分析过的分支（本地项目的版本选择事实来源）。
+     */
+    @GetMapping("/projects/{projectId}/analyzed-branches")
+    public Result<List<BranchInfo>> getAnalyzedBranches(@PathVariable Long projectId) {
+        return Result.success(queryService.getAnalyzedBranches(projectId));
+    }
+
+    /** 从元数据枚举指定分支已分析过的 commit。 */
+    @GetMapping("/projects/{projectId}/analyzed-commits")
+    public Result<List<CommitInfo>> getAnalyzedCommits(
+            @PathVariable Long projectId,
+            @RequestParam String branch) {
+        return Result.success(queryService.getAnalyzedCommits(projectId, branch));
+    }
+
+    /**
+     * 同一入口在两个分析版本之间的链路成员 + 源码 diff（版本 = branch + commitId 对，
+     * commitId 为空表示该分支 HEAD 快照）。
+     */
+    @GetMapping("/entry-chain-diff")
+    public Result<EntryChainDiffDTO> getEntryChainDiff(
+            @RequestParam Long projectId,
+            @RequestParam String className,
+            @RequestParam String methodName,
+            @RequestParam String fromBranch,
+            @RequestParam(required = false) String fromCommitId,
+            @RequestParam String toBranch,
+            @RequestParam(required = false) String toCommitId,
+            @RequestParam(required = false) Integer maxDepth) {
+        return Result.success(pathQueryService.getEntryChainDiff(
+                projectId, className, methodName,
+                fromBranch, fromCommitId, toBranch, toCommitId, maxDepth));
     }
 
     /**

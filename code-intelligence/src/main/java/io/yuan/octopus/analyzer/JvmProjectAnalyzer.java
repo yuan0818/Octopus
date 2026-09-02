@@ -1,9 +1,9 @@
 package io.yuan.octopus.analyzer;
 
 import io.yuan.octopus.domain.*;
-import io.yuan.octopus.entity.JavaProjectEntity;
+import io.yuan.octopus.entity.AnalyzedProjectEntity;
 import io.yuan.octopus.entity.RepoSnapshot;
-import io.yuan.octopus.repository.JavaProjectRepository;
+import io.yuan.octopus.repository.AnalyzedProjectRepository;
 import io.yuan.octopus.service.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,7 +40,7 @@ public class JvmProjectAnalyzer implements ProjectAnalyzer {
     private final GraphStoreService graphStoreService;
     private final MetadataStoreService metadataStoreService;
     private final BackendProjectFlagService backendProjectFlagService;
-    private final JavaProjectRepository javaProjectRepository;
+    private final AnalyzedProjectRepository javaProjectRepository;
 
     public JvmProjectAnalyzer(ProjectScanService projectScanService,
                               CodeParseService codeParseService,
@@ -49,7 +49,7 @@ public class JvmProjectAnalyzer implements ProjectAnalyzer {
                               GraphStoreService graphStoreService,
                               MetadataStoreService metadataStoreService,
                               BackendProjectFlagService backendProjectFlagService,
-                              JavaProjectRepository javaProjectRepository) {
+                              AnalyzedProjectRepository javaProjectRepository) {
         this.projectScanService = projectScanService;
         this.codeParseService = codeParseService;
         this.psiExecutor = psiExecutor;
@@ -89,14 +89,14 @@ public class JvmProjectAnalyzer implements ProjectAnalyzer {
     /**
      * Scans the workspace root and returns discovered JVM sub-projects.
      */
-    public List<JavaProject> scanProjects(RepoSnapshot snapshot) {
+    public List<DiscoveredProject> scanProjects(RepoSnapshot snapshot) {
         return projectScanService.scanProjects(snapshot);
     }
 
     /**
      * Scans a single local directory as a JVM project.
      */
-    public JavaProject scanSingleProject(Path projectDir, String projectName) {
+    public DiscoveredProject scanSingleProject(Path projectDir, String projectName) {
         return projectScanService.scanSingleProject(projectDir, projectName);
     }
 
@@ -112,7 +112,7 @@ public class JvmProjectAnalyzer implements ProjectAnalyzer {
      * @return list of module names where PSI was degraded (fell back to JavaParser)
      */
     public List<String> analyzeDeep(AnalysisContext ctx,
-                                    List<JavaProject> projects,
+                                    List<DiscoveredProject> projects,
                                     RepoSnapshot snapshot) {
         List<String> psiDegraded = new ArrayList<>();
 
@@ -122,12 +122,12 @@ public class JvmProjectAnalyzer implements ProjectAnalyzer {
                 .toList();
 
         // ── Phase 0: parse all modules ──────────────────────────────────
-        record ProjectContext(JavaProject project, JavaProjectEntity entity,
+        record ProjectContext(DiscoveredProject project, AnalyzedProjectEntity entity,
                               ParseResult parseResult) {}
         List<ProjectContext> contexts = new ArrayList<>();
 
-        for (JavaProject project : projects) {
-            JavaProjectEntity entity = findOrCreateEntity(project, ctx);
+        for (DiscoveredProject project : projects) {
+            AnalyzedProjectEntity entity = findOrCreateEntity(project, ctx);
             ParseResult parseResult = codeParseService.parseProject(project, allSourceDirs);
             contexts.add(new ProjectContext(project, entity, parseResult));
         }
@@ -140,7 +140,7 @@ public class JvmProjectAnalyzer implements ProjectAnalyzer {
 
         // ── Global PSI analysis ─────────────────────────────────────────
         Path workspaceRoot = ctx.projectRoot().toAbsolutePath().normalize();
-        JavaProject rootProject = new JavaProject(
+        DiscoveredProject rootProject = new DiscoveredProject(
                 workspaceRoot.getFileName().toString(),
                 workspaceRoot, null, allSourceDirs, null);
         PSIAnalysisOutput globalPsiOutput = psiExecutor.execute(rootProject);
@@ -158,7 +158,7 @@ public class JvmProjectAnalyzer implements ProjectAnalyzer {
         List<Long> allProjectIds = contexts.stream().map(c -> c.entity().getId()).toList();
 
         // ── Phase 1: build call graphs, store nodes + metadata ──────────
-        record GraphEntry(JavaProjectEntity entity, CallGraph callGraph) {}
+        record GraphEntry(AnalyzedProjectEntity entity, CallGraph callGraph) {}
         List<GraphEntry> graphEntries = new ArrayList<>();
 
         for (ProjectContext pctx : contexts) {
@@ -189,7 +189,7 @@ public class JvmProjectAnalyzer implements ProjectAnalyzer {
 
             graphStoreService.clearProjectGraph(pctx.entity().getId(), ctx.branch(), ctx.commitId());
             graphStoreService.storeNodes(pctx.entity().getId(), ctx.branch(), ctx.commitId(), callGraph.nodes());
-            metadataStoreService.storeMetadata(pctx.entity().getId(), ctx.branch(), pctx.parseResult());
+            metadataStoreService.storeMetadata(pctx.entity().getId(), ctx.branch(), ctx.commitId(), pctx.parseResult());
             backendProjectFlagService.updateBackendProjectFlag(pctx.entity());
 
             graphEntries.add(new GraphEntry(pctx.entity(), callGraph));
@@ -253,14 +253,14 @@ public class JvmProjectAnalyzer implements ProjectAnalyzer {
         return new CallGraph(moduleNodes, moduleEdges);
     }
 
-    private JavaProjectEntity findOrCreateEntity(JavaProject project, AnalysisContext ctx) {
+    private AnalyzedProjectEntity findOrCreateEntity(DiscoveredProject project, AnalysisContext ctx) {
         if (ctx.repoConfigId() == null) {
             return findOrCreateLocalEntity(project, ctx);
         }
         return javaProjectRepository
                 .findByRepoConfigIdAndBranchAndProjectName(ctx.repoConfigId(), ctx.branch(), project.projectName())
                 .orElseGet(() -> {
-                    JavaProjectEntity entity = JavaProjectEntity.builder()
+                    AnalyzedProjectEntity entity = AnalyzedProjectEntity.builder()
                             .repoConfigId(ctx.repoConfigId())
                             .branch(ctx.branch())
                             .projectName(project.projectName())
@@ -272,8 +272,11 @@ public class JvmProjectAnalyzer implements ProjectAnalyzer {
                 });
     }
 
-    private JavaProjectEntity findOrCreateLocalEntity(JavaProject project, AnalysisContext ctx) {
+    private AnalyzedProjectEntity findOrCreateLocalEntity(DiscoveredProject project, AnalysisContext ctx) {
         String canonicalPath = project.projectPath().toAbsolutePath().normalize().toString();
+        // 身份 = 路径（同仓库一个 project）；branch/commitId 是版本维度的展示字段，
+        // 指向最近一次分析。多分支数据在 class_info/method_info/Neo4j 按 branch 列共存，
+        // 版本枚举由元数据查询提供（analyzed-branches / analyzed-commits）
         return javaProjectRepository
                 .findByRepoConfigIdIsNullAndProjectPath(canonicalPath)
                 .map(entity -> {
@@ -282,7 +285,7 @@ public class JvmProjectAnalyzer implements ProjectAnalyzer {
                     return javaProjectRepository.save(entity);
                 })
                 .orElseGet(() -> {
-                    JavaProjectEntity entity = JavaProjectEntity.builder()
+                    AnalyzedProjectEntity entity = AnalyzedProjectEntity.builder()
                             .repoConfigId(null)
                             .branch(ctx.branch())
                             .projectName(project.projectName())
@@ -295,9 +298,9 @@ public class JvmProjectAnalyzer implements ProjectAnalyzer {
                 });
     }
 
-    private void markProjectsAnalyzed(List<JavaProject> projects, AnalysisContext ctx) {
+    private void markProjectsAnalyzed(List<DiscoveredProject> projects, AnalysisContext ctx) {
         LocalDateTime now = LocalDateTime.now();
-        for (JavaProject project : projects) {
+        for (DiscoveredProject project : projects) {
             if (ctx.repoConfigId() == null) {
                 String canonicalPath = project.projectPath().toAbsolutePath().normalize().toString();
                 javaProjectRepository.findByRepoConfigIdIsNullAndProjectPath(canonicalPath)

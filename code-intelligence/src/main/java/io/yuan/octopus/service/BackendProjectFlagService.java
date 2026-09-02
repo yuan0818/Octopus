@@ -1,10 +1,10 @@
 package io.yuan.octopus.service;
 
 import io.yuan.octopus.entity.ClassInfo;
-import io.yuan.octopus.entity.JavaProjectEntity;
+import io.yuan.octopus.entity.AnalyzedProjectEntity;
 import io.yuan.octopus.repository.AnnotationInfoRepository;
 import io.yuan.octopus.repository.ClassInfoRepository;
-import io.yuan.octopus.repository.JavaProjectRepository;
+import io.yuan.octopus.repository.AnalyzedProjectRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -25,11 +25,11 @@ public class BackendProjectFlagService {
 
     private final ClassInfoRepository classInfoRepository;
     private final AnnotationInfoRepository annotationInfoRepository;
-    private final JavaProjectRepository javaProjectRepository;
+    private final AnalyzedProjectRepository javaProjectRepository;
 
     public BackendProjectFlagService(ClassInfoRepository classInfoRepository,
                                      AnnotationInfoRepository annotationInfoRepository,
-                                     JavaProjectRepository javaProjectRepository) {
+                                     AnalyzedProjectRepository javaProjectRepository) {
         this.classInfoRepository = classInfoRepository;
         this.annotationInfoRepository = annotationInfoRepository;
         this.javaProjectRepository = javaProjectRepository;
@@ -41,7 +41,7 @@ public class BackendProjectFlagService {
      * in the stored class metadata.  Always writes either {@code true} or
      * {@code false} to overwrite stale values.
      */
-    public void updateBackendProjectFlag(JavaProjectEntity projectEntity) {
+    public void updateBackendProjectFlag(AnalyzedProjectEntity projectEntity) {
         List<Long> classIds = classInfoRepository.findByProjectId(projectEntity.getId())
                 .stream().map(ClassInfo::getId)
                 .toList();

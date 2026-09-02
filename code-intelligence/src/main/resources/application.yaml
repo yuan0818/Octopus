@@ -38,14 +38,40 @@ octopus:
     username: neo4j
     password: ${NEO4J_PASSWORD:octpus123}
   psi:
-    jar-path: /opt/octopus/jvm-project-analyzer.jar
-    timeout-seconds: 1500     # 25 min per module: covers indexing (1200s) + analysis time
-    service-url: http://localhost:8377     # HTTP mode: requires PSI service started via ./run-jvm-analyzer-local.sh
-    connect-retry-attempts: 3         # Number of attempts before giving up (ConnectException / 503)
-    connect-retry-interval-seconds: 5 # Wait between retries (IntelliJ takes ~30-120s to start)
+    timeout-seconds: 1500
+    connect-retry-attempts: 3
+    connect-retry-interval-seconds: 5
+    service-url: http://localhost:8377     # PSI HTTP service (runIde)
+  go:
+    service-url: http://localhost:8378      # go-project-analyzer (run-go-analyzer-local.sh)
+    timeout-seconds: 600
+    connect-retry-attempts: 3
+    connect-retry-interval-seconds: 5
   git:
     shallow-clone: true
     local-repo-ttl-days: 30
     local-repo-max-count: 50
     local-repo-max-size-gb: 100
     service-url: http://localhost:8081     # git service runs in Docker, port-mapped to localhost:8081
+  review-agent:
+    service-url: http://localhost:8083      # octopus-review-agent
+  source-reconstruct:
+    url: http://localhost:8082              # octopus-code-reconstruct（git 源码读取）
+  gerrit:
+    webhook-token-header: X-Gerrit-Token
+    octopus-base-url: http://localhost:8080  # for Gerrit comment detail links
+  change-review:
+    enabled: ${CHANGE_REVIEW_ENABLED:true}  # feature flag; when false, webhook returns 410 and consumer stays idle
+    comment-top-n: 10
+    review-endpoint-timeout-seconds: 120
+    default-skill-id: code-review
+
+spring.rabbitmq:
+  host: ${RABBITMQ_HOST:localhost}
+  port: ${RABBITMQ_PORT:5672}
+  username: ${RABBITMQ_USER:guest}
+  password: ${RABBITMQ_PASSWORD:guest}
+  listener:
+    simple:
+      acknowledge-mode: manual
+      prefetch: 1

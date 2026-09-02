@@ -14,6 +14,10 @@ public class AgentModel {
     @Column(name = "provider", nullable = false, length = 50)
     private String provider;        // "claude" / "openai"
 
+    /** API 报文格式：openai（兼容）/ claude；空则按 provider 推断（claude→claude，其余→openai）。 */
+    @Column(name = "api_format", length = 20)
+    private String apiFormat;
+
     @Column(name = "model_id", nullable = false, length = 100)
     private String modelId;         // API model 参数
 
@@ -50,6 +54,9 @@ public class AgentModel {
     public void setName(String name) { this.name = name; }
     public String getProvider() { return provider; }
     public void setProvider(String provider) { this.provider = provider; }
+
+    public String getApiFormat() { return apiFormat; }
+    public void setApiFormat(String apiFormat) { this.apiFormat = apiFormat; }
     public String getModelId() { return modelId; }
     public void setModelId(String modelId) { this.modelId = modelId; }
     public String getApiUrl() { return apiUrl; }

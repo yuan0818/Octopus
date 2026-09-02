@@ -39,7 +39,7 @@ export interface RepoSyncResult {
   tag: string | null;
 }
 
-export interface JavaProject {
+export interface DiscoveredProject {
   projectName: string;
   projectPath: string;
   buildTool: 'MAVEN' | 'GRADLE';
@@ -254,6 +254,8 @@ export interface ReviewRequest {
   className: string;
   methodName: string;
   strategy?: string;
+  branch?: string | null;
+  commitId?: string | null;
   requirements?: RequirementItem[];
   docPath?: string;
   reviewMode?: 'REQUIREMENT_AWARE' | 'RISK_BASED';
@@ -313,4 +315,18 @@ export interface ProjectInfo {
   isApiService: boolean | null;
   buildTool: string | null;
   javaVersion: string | null;
+}
+
+/** Git 分支概要（来自 JGit 真实读取）。 */
+export interface BranchInfo {
+  name: string;
+  latestCommitId: string | null;
+}
+
+/** Git commit 概要（来自 JGit 真实读取）。 */
+export interface CommitInfo {
+  commitId: string;
+  shortMessage: string;
+  author: string;
+  committedAt: number;
 }

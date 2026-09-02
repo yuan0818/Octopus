@@ -73,7 +73,7 @@ public class PSIExecutor {
      * @param project the Java project to analyze
      * @return deserialized PSI analysis output, or {@code null} if PSI analysis is disabled or fails
      */
-    public PSIAnalysisOutput execute(JavaProject project) {
+    public PSIAnalysisOutput execute(DiscoveredProject project) {
         try {
             PSIAnalysisOutput output = psiServiceUrl != null && !psiServiceUrl.isBlank()
                     ? executeViaHttp(project)
@@ -99,7 +99,7 @@ public class PSIExecutor {
      * start, so the first few attempts may fail with ConnectException before the service
      * is ready. Timeouts are NOT retried — they indicate the analysis itself took too long.
      */
-    private PSIAnalysisOutput executeViaHttp(JavaProject project) {
+    private PSIAnalysisOutput executeViaHttp(DiscoveredProject project) {
         String projectDir = mapProjectDirForPsi(project.projectPath().toAbsolutePath().toString());
         String requestJson = gson.toJson(Map.of("projectDir", projectDir));
         HttpRequest request = HttpRequest.newBuilder()
@@ -238,7 +238,7 @@ public class PSIExecutor {
 
     // ── Subprocess mode (legacy) ────────────────────────────────────
 
-    private PSIAnalysisOutput executeViaSubprocess(JavaProject project) {
+    private PSIAnalysisOutput executeViaSubprocess(DiscoveredProject project) {
         if (psiJarPath == null || psiJarPath.isBlank()) {
             log.info("PSI analysis disabled (octopus.psi.jar-path not configured). Falling back to JavaParser-only mode.");
             return null;
@@ -303,7 +303,7 @@ public class PSIExecutor {
         return pb.start();
     }
 
-    private Path createTempOutputFile(JavaProject project) {
+    private Path createTempOutputFile(DiscoveredProject project) {
         try {
             return Files.createTempFile("octopus-psi-" + sanitize(project.projectName()) + "-", ".json");
         } catch (IOException e) {

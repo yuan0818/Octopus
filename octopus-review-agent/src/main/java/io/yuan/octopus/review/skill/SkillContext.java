@@ -24,6 +24,9 @@ public class SkillContext {
     private final LLMConfig llmConfig;
     private final ReviewMode reviewMode;
 
+    /** 链路版本对比摘要（可选）；注入 prompt 的 Diff Context 段落。 */
+    private String diffContext;
+
     public SkillContext(String projectId, String className, String methodName,
                         String strategy, List<RequirementItem> requirements,
                         String projectKnowledge, Map<String, Object> chainMetadata,
@@ -59,4 +62,6 @@ public class SkillContext {
     public Map<String, String> getSourceCode() { return sourceCode; }
     public LLMConfig getLlmConfig() { return llmConfig; }
     public ReviewMode getReviewMode() { return reviewMode; }
+    public String getDiffContext() { return diffContext; }
+    public void setDiffContext(String diffContext) { this.diffContext = diffContext; }
 }

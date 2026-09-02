@@ -60,7 +60,8 @@ public class HttpLLMAdapter implements LLMAdapter {
         int maxTokens = config.getMaxTokens() != null ? config.getMaxTokens() : 128000;
         double temperature = config.getTemperature() != null ? config.getTemperature() : 0.3;
 
-        String requestBody = buildRequestBody(systemPrompt, userPrompt, model, maxTokens, temperature, provider);
+        boolean claudeFormat = isClaudeFormat(config, provider);
+        String requestBody = buildRequestBody(systemPrompt, userPrompt, model, maxTokens, temperature, claudeFormat);
         log.info("Calling LLM: provider={}, model={}, maxTokens={}, apiUrl={}", provider, model, maxTokens, apiUrl);
 
         try {
@@ -91,7 +92,7 @@ public class HttpLLMAdapter implements LLMAdapter {
             }
 
             log.info("LLM call completed: provider={}, model={}, elapsed={}ms", provider, model, elapsed);
-            return parseResponse(response.body(), model, elapsed, provider);
+            return parseResponse(response.body(), model, elapsed, claudeFormat);
 
         } catch (RuntimeException e) {
             throw e;
@@ -102,8 +103,8 @@ public class HttpLLMAdapter implements LLMAdapter {
     }
 
     private String buildRequestBody(String systemPrompt, String userPrompt,
-                                     String model, int maxTokens, double temperature, String provider) {
-        if ("claude".equals(provider)) {
+                                     String model, int maxTokens, double temperature, boolean claudeFormat) {
+        if (claudeFormat) {
             Map<String, Object> body = Map.of(
                     "model", model,
                     "max_tokens", maxTokens,
@@ -126,7 +127,7 @@ public class HttpLLMAdapter implements LLMAdapter {
         }
     }
 
-    private LLMResponse parseResponse(String json, String model, long elapsedMs, String provider) {
+    private LLMResponse parseResponse(String json, String model, long elapsedMs, boolean claudeFormat) {
         try {
             JsonObject root = gson.fromJson(json, JsonObject.class);
 
@@ -134,7 +135,7 @@ public class HttpLLMAdapter implements LLMAdapter {
             int promptTokens;
             int completionTokens;
 
-            if ("claude".equals(provider)) {
+            if (claudeFormat) {
                 content = root.getAsJsonArray("content")
                         .get(0).getAsJsonObject()
                         .get("text").getAsString();
@@ -157,5 +158,13 @@ public class HttpLLMAdapter implements LLMAdapter {
             log.error("Failed to parse LLM response: {}", e.getMessage());
             return new LLMResponse(json, model, 0, 0);
         }
+    }
+
+    /** 报文格式判定：显式 apiFormat 优先，否则按 provider 推断（claude→claude，其余→openai）。 */
+    private static boolean isClaudeFormat(io.yuan.octopus.review.dto.LLMConfig config, String provider) {
+        if (config != null && config.getApiFormat() != null && !config.getApiFormat().isBlank()) {
+            return "claude".equalsIgnoreCase(config.getApiFormat());
+        }
+        return "claude".equals(provider);
     }
 }

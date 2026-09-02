@@ -26,8 +26,12 @@ public class ModelRegistry {
     private final Map<String, AtomicInteger> stats = new ConcurrentHashMap<>();
     private final Map<String, List<String>> fallbackChains = new ConcurrentHashMap<>();
 
-    public ModelRegistry(AgentModelRepository repository) {
+    private final io.yuan.octopus.review.service.SecretCipher secretCipher;
+
+    public ModelRegistry(AgentModelRepository repository,
+                         io.yuan.octopus.review.service.SecretCipher secretCipher) {
         this.repository = repository;
+        this.secretCipher = secretCipher;
     }
 
     @PostConstruct
@@ -36,6 +40,11 @@ public class ModelRegistry {
         for (AgentModel entity : all) {
             cache.put(entity.getName(), toConfig(entity));
             stats.put(entity.getName(), new AtomicInteger(0));
+            // 存量明文密钥懒迁移为密文存储
+            if (!secretCipher.isEncrypted(entity.getApiKey())) {
+                entity.setApiKey(secretCipher.encrypt(entity.getApiKey()));
+                repository.save(entity);
+            }
         }
         // Build fallback chains per provider
         all.stream().filter(AgentModel::isEnabled)
@@ -52,9 +61,10 @@ public class ModelRegistry {
         AgentModel entity = new AgentModel();
         entity.setName(config.getName());
         entity.setProvider(config.getProvider());
+        entity.setApiFormat(config.getApiFormat());
         entity.setModelId(config.getModelId());
         entity.setApiUrl(config.getApiUrl());
-        entity.setApiKey(config.getApiKey());
+        entity.setApiKey(secretCipher.encrypt(config.getApiKey()));
         entity.setMaxTokens(config.getMaxTokens());
         entity.setTemperature(config.getTemperature());
         entity.setEnabled(config.isEnabled());
@@ -99,8 +109,9 @@ public class ModelRegistry {
     @Transactional
     public void setApiKey(String provider, String apiKey) {
         List<AgentModel> models = repository.findByProvider(provider);
+        String encrypted = secretCipher.encrypt(apiKey);
         for (AgentModel m : models) {
-            m.setApiKey(apiKey);
+            m.setApiKey(encrypted);
             repository.save(m);
         }
         // Update cache
@@ -178,9 +189,11 @@ public class ModelRegistry {
         ModelConfig config = new ModelConfig();
         config.setName(entity.getName());
         config.setProvider(entity.getProvider());
+        config.setApiFormat(entity.getApiFormat());
         config.setModelId(entity.getModelId());
         config.setApiUrl(entity.getApiUrl());
-        config.setApiKey(entity.getApiKey());
+        // 运行时使用明文（内部 cache），落库始终是密文
+        config.setApiKey(secretCipher.decrypt(entity.getApiKey()));
         config.setMaxTokens(entity.getMaxTokens());
         config.setTemperature(entity.getTemperature());
         config.setEnabled(entity.isEnabled());

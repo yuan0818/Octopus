@@ -87,6 +87,19 @@ public class MemoryManagerImpl implements MemoryManager {
                               int promptTokens, int completionTokens, int totalTokens,
                               int durationMs, String summary, String status,
                               String commitId, String tag) {
+        recordSession(sessionId, projectId, anchorClass, anchorMethod, strategy, requirements,
+                chainClasses, fullReport, model, promptTokens, completionTokens, totalTokens,
+                durationMs, summary, status, commitId, tag, null, null, null);
+    }
+
+    @Override
+    public void recordSession(String sessionId, String projectId, String anchorClass,
+                              String anchorMethod, String strategy, String requirements,
+                              String chainClasses, String fullReport, String model,
+                              int promptTokens, int completionTokens, int totalTokens,
+                              int durationMs, String summary, String status,
+                              String commitId, String tag,
+                              String changeNumber, Integer patchsetNumber, Long changeReviewTaskId) {
         ReviewSession session = new ReviewSession();
         session.setId(sessionId);
         session.setProjectId(projectId);
@@ -95,6 +108,9 @@ public class MemoryManagerImpl implements MemoryManager {
         session.setStrategy(strategy);
         session.setCommitId(commitId);
         session.setTag(tag);
+        session.setChangeNumber(changeNumber);
+        session.setPatchsetNumber(patchsetNumber);
+        session.setChangeReviewTaskId(changeReviewTaskId);
         session.setRequirements(requirements);
         session.setChainClasses(chainClasses);
         session.setFullReport(fullReport);
@@ -127,8 +143,8 @@ public class MemoryManagerImpl implements MemoryManager {
     @Override
     public Page<ReviewSession> getSessionsFiltered(String projectId, String status, String anchorClass,
                                                     LocalDateTime startTime, LocalDateTime endTime,
-                                                    int page, int size) {
-        return sessionRepo.findSessionsFiltered(projectId, status, anchorClass, startTime, endTime,
+                                                    String commitId, int page, int size) {
+        return sessionRepo.findSessionsFiltered(projectId, status, anchorClass, startTime, endTime, commitId,
                 PageRequest.of(page, size));
     }
 
@@ -140,6 +156,11 @@ public class MemoryManagerImpl implements MemoryManager {
     @Override
     public List<ReviewFinding> getFindingsBySession(String sessionId) {
         return findingRepo.findBySessionId(sessionId);
+    }
+
+    @Override
+    public List<ReviewSession> getSessionsByChangeTask(Long changeReviewTaskId) {
+        return sessionRepo.findByChangeReviewTaskIdOrderByCreatedAtAsc(changeReviewTaskId);
     }
 
     @Override

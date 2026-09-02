@@ -58,6 +58,7 @@ public class LLMIntegrationService {
             try { Thread.sleep(1000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
             LLMConfig fallbackConfig = new LLMConfig();
             fallbackConfig.setProvider(fallback.getProvider());
+            fallbackConfig.setApiFormat(fallback.getApiFormat());
             fallbackConfig.setModel(fallback.getModelId());
             fallbackConfig.setApiKey(fallback.getApiKey());
             fallbackConfig.setApiUrl(fallback.getApiUrl());

@@ -1,14 +1,21 @@
 import { useState, useEffect } from 'react';
-import { Input, Button, Card, Descriptions, Table, Tag, Space, App, Typography, Empty } from 'antd';
+import { Input, Button, Card, Descriptions, Table, Tag, Space, App, Typography, Empty, Select } from 'antd';
 import { SearchOutlined, CodeOutlined, BranchesOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
 import { queryApi } from '../../api/query';
+import { useBranchCommit } from '../../components/BranchCommitContext';
+import BranchCommitInlineSelector from '../../components/BranchCommitInlineSelector';
 import type { ClassDetail as ClassDetailType } from '../../types';
 
 const { Text } = Typography;
 
 export default function ClassDetail() {
   const { message } = App.useApp();
+  const { branch, commitId, projects, setBranch, setCommitId } = useBranchCommit();
+  // 顶栏已无全局项目选择器，项目在本页面内选择
+  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+  // 当前项目的默认分支/commit，作为本地（无 Git）项目的兜底选项来源
+  const currentProject = projects.find((p) => p.id === selectedProjectId);
   const [searchParams] = useSearchParams();
   const [qualifiedName, setQualifiedName] = useState(searchParams.get('name') || '');
   const [data, setData] = useState<ClassDetailType | null>(null);
@@ -19,7 +26,7 @@ export default function ClassDetail() {
     if (!q) { message.warning('请输入全限定类名'); return; }
     setLoading(true);
     try {
-      const res = await queryApi.classDetail(q);
+      const res = await queryApi.classDetail(q, branch, commitId);
       setData(res.data);
     } catch { message.error('查询失败'); }
     setLoading(false);
@@ -28,29 +35,62 @@ export default function ClassDetail() {
   useEffect(() => {
     const name = searchParams.get('name');
     if (name) {
-      queryApi.classDetail(name)
+      queryApi.classDetail(name, branch, commitId)
         .then((res) => { setQualifiedName(name); setData(res.data); })
         .catch(() => message.error('查询失败'));
     }
-  }, [searchParams]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, branch, commitId]);
 
   return (
     <div className="page-container">
       {/* Search bar */}
       <Card style={{ marginBottom: 20 }}>
-        <Space.Compact style={{ width: '100%', maxWidth: 600 }}>
-          <Input
-            value={qualifiedName}
-            onChange={(e) => setQualifiedName(e.target.value)}
-            placeholder="输入全限定类名，如 com.example.OrderService"
-            onPressEnter={() => search()}
-            prefix={<CodeOutlined />}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+          <Space.Compact style={{ flex: 1, minWidth: 300, maxWidth: 600 }}>
+            <Input
+              value={qualifiedName}
+              onChange={(e) => setQualifiedName(e.target.value)}
+              placeholder="输入全限定类名，如 com.example.OrderService"
+              onPressEnter={() => search()}
+              prefix={<CodeOutlined />}
+              allowClear
+            />
+            <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => search()}>
+              查询
+            </Button>
+          </Space.Compact>
+          <Select
+            showSearch
+            style={{ minWidth: 200 }}
+            placeholder="选择项目"
+            value={selectedProjectId ?? undefined}
+            onChange={(v) => {
+              setSelectedProjectId(v ?? null);
+              const p = projects.find((x) => x.id === v);
+              if (p) {
+                // 切项目时用项目自带 branch/commitId 作初值，避免残留上一项目的版本选择
+                setBranch(p.branch);
+                setCommitId(p.commitId);
+              }
+            }}
+            optionFilterProp="label"
             allowClear
+            options={projects.map((p) => ({
+              value: p.id,
+              label: `${p.projectName} [${p.branch ?? 'local'}]`,
+            }))}
           />
-          <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => search()}>
-            查询
-          </Button>
-        </Space.Compact>
+          <BranchCommitInlineSelector
+            projectId={selectedProjectId}
+            branch={branch}
+            commitId={commitId}
+            onBranchChange={setBranch}
+            onCommitChange={setCommitId}
+            fallbackBranch={currentProject?.branch}
+            fallbackCommitId={currentProject?.commitId}
+          />
+        </div>
       </Card>
 
       {data && (

@@ -14,7 +14,7 @@ public class Skill {
     private final String name;              // 可读名称
     private final String description;       // 描述
     private final String promptTemplateId;   // 关联的 PromptTemplate ID
-    private final String preferredProvider;  // 首选模型提供商，如 "claude"
+    private final String preferredProvider;  // 展示性提示字段，不参与运行时模型路由（路由由 modelName/ModelRegistry 决定）
     private final String outputParser;       // 输出解析器标识
     private final int maxTokens;            // 输出 token 上限
     private final boolean enabled;          // 是否启用

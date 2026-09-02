@@ -30,3 +30,7 @@ reconstruct:
   max-depth: 10
   max-classes: 50
   field-filter: true
+  git:
+    # 本地 git 仓库存储根目录，需与 octopus-git 服务的 octopus.git.local-repo-base 保持一致。
+    # GitSourceProvider 通过此路径 + repoUrl 提取的仓库名定位本地 clone。
+    local-repo-base: ${OCTOPUS_GIT_LOCAL_REPO_BASE:/data/repos}

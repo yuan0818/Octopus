@@ -38,7 +38,7 @@ public class CodeParseService {
 
     private static final Logger log = LoggerFactory.getLogger(CodeParseService.class);
 
-    public ParseResult parseProject(JavaProject project) {
+    public ParseResult parseProject(DiscoveredProject project) {
         return parseProject(project, List.of());
     }
 
@@ -53,7 +53,7 @@ public class CodeParseService {
      *                        to add to the symbol solver for cross-module type resolution
      * @return parse result containing only the project's own files
      */
-    public ParseResult parseProject(JavaProject project, Collection<Path> extraSourceDirs) {
+    public ParseResult parseProject(DiscoveredProject project, Collection<Path> extraSourceDirs) {
         List<ParsedFile> parsedFiles = new ArrayList<>();
         List<ParseError> errors = new ArrayList<>();
 
@@ -85,7 +85,7 @@ public class CodeParseService {
      * @param filePaths absolute paths of {@code .java} files to parse (typically the diff-changed set)
      * @return parse result containing only the requested files
      */
-    public ParseResult parseFiles(JavaProject project, Set<String> filePaths) {
+    public ParseResult parseFiles(DiscoveredProject project, Set<String> filePaths) {
         if (filePaths.isEmpty()) {
             return new ParseResult(List.of(), List.of());
         }
@@ -133,7 +133,7 @@ public class CodeParseService {
         }
     }
 
-    private JavaParser createJavaParser(JavaProject project, Collection<Path> extraSourceDirs) {
+    private JavaParser createJavaParser(DiscoveredProject project, Collection<Path> extraSourceDirs) {
         ParserConfiguration config = new ParserConfiguration();
         config.setLanguageLevel(mapLanguageLevel(project.javaVersion()));
 
@@ -384,7 +384,9 @@ public class CodeParseService {
         extractMethodCalls(methodDecl, methodCalls, unresolvedDeps);
 
         return new ParsedMethod(name, signature, parameterTypes, returnType,
-                modifiers, sourceCode, methodCalls, annotations);
+                modifiers, sourceCode, methodCalls, annotations,
+                methodDecl.getBegin().map(p -> p.line).orElse(null),
+                methodDecl.getEnd().map(p -> p.line).orElse(null));
     }
 
     private ParsedMethod extractConstructor(ConstructorDeclaration ctorDecl, String qualifiedClassName) {
@@ -410,7 +412,9 @@ public class CodeParseService {
         extractMethodCalls(ctorDecl, methodCalls, unresolvedDeps);
 
         return new ParsedMethod(name, signature, parameterTypes, returnType,
-                modifiers, sourceCode, methodCalls, annotations);
+                modifiers, sourceCode, methodCalls, annotations,
+                ctorDecl.getBegin().map(p -> p.line).orElse(null),
+                ctorDecl.getEnd().map(p -> p.line).orElse(null));
     }
 
     private String buildMethodSignature(String className, String methodName,

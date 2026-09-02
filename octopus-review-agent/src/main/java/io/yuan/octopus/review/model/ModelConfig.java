@@ -7,6 +7,7 @@ public class ModelConfig {
 
     private String name;            // 模型唯一标识，如 "claude-sonnet-4"
     private String provider;        // "claude" / "openai" / ...
+    private String apiFormat;       // 报文格式：openai（兼容）/ claude；空则按 provider 推断
     private String modelId;         // 实际 API model 参数，如 "claude-sonnet-4-20250514"
     private String apiUrl;          // API 端点 URL
     private String apiKey;          // API Key
@@ -29,6 +30,9 @@ public class ModelConfig {
     }
 
     // ── Getters & Setters ──
+
+    public String getApiFormat() { return apiFormat; }
+    public void setApiFormat(String apiFormat) { this.apiFormat = apiFormat; }
 
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }

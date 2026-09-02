@@ -1,7 +1,7 @@
 package io.yuan.octopus.controller;
 
 import io.yuan.octopus.infra.common.Result;
-import io.yuan.octopus.domain.JavaProject;
+import io.yuan.octopus.domain.DiscoveredProject;
 import io.yuan.octopus.dto.request.CreateRepoConfigRequest;
 import io.yuan.octopus.dto.request.UpdateRepoConfigRequest;
 import io.yuan.octopus.dto.response.RepoConfigSummary;
@@ -64,10 +64,10 @@ public class RepoController {
     }
 
     @GetMapping("/{id}/projects")
-    public Result<List<JavaProject>> scanProjects(@PathVariable Long id) {
+    public Result<List<DiscoveredProject>> scanProjects(@PathVariable Long id) {
         RepoConfig repoConfig = repoConfigService.getById(id);
         RepoSnapshot snapshot = gitService.cloneOrPull(repoConfig);
-        List<JavaProject> projects = projectScanService.scanProjects(snapshot);
+        List<DiscoveredProject> projects = projectScanService.scanProjects(snapshot);
         return Result.success(projects);
     }
 }

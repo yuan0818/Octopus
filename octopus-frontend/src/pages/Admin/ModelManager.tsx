@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, Table, Button, Modal, Form, Input, Switch, Space, Tag, App } from 'antd';
+import { Card, Table, Button, Modal, Form, Input, Switch, Space, Tag, App, Select } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, PoweroffOutlined } from '@ant-design/icons';
 import { adminApi } from '../../api/admin';
 
@@ -35,7 +35,8 @@ export default function ModelManager() {
 
   const openEdit = (record: any) => {
     setEditing(record);
-    form.setFieldsValue(record);
+    // 密钥不回显：留空表示沿用已存密钥（后端加密存储）
+    form.setFieldsValue({ ...record, apiKey: '' });
     setModalOpen(true);
   };
 
@@ -66,6 +67,9 @@ export default function ModelManager() {
   const columns = [
     { title: '名称', dataIndex: 'name', key: 'name' },
     { title: 'Provider', dataIndex: 'provider', key: 'provider', render: (v: string) => <Tag>{v}</Tag> },
+    { title: 'API 格式', dataIndex: 'apiFormat', key: 'apiFormat',
+      render: (v: string, r: any) => <Tag color={(v || r.provider) === 'claude' ? 'purple' : 'blue'}>
+        {v === 'claude' || (!v && r.provider === 'claude') ? 'Claude' : 'OpenAI 兼容'}</Tag> },
     { title: 'Model ID', dataIndex: 'modelId', key: 'modelId', ellipsis: true },
     { title: 'API URL', dataIndex: 'apiUrl', key: 'apiUrl', ellipsis: true },
     { title: 'Max Tokens', dataIndex: 'maxTokens', key: 'maxTokens', width: 100 },
@@ -85,10 +89,20 @@ export default function ModelManager() {
       <Modal title={editing ? '编辑模型' : '添加模型'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} width={600}>
         <Form form={form} layout="vertical">
           {!editing && <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input placeholder="claude-sonnet-4" /></Form.Item>}
-          <Form.Item name="provider" label="Provider" rules={[{ required: true }]}><Input placeholder="claude" /></Form.Item>
+          <Form.Item name="provider" label="Provider" rules={[{ required: true }]}><Input placeholder="claude / openai / deepseek …" /></Form.Item>
+          <Form.Item name="apiFormat" label="API 格式" initialValue="openai"
+            tooltip="请求/响应报文格式。OpenAI 兼容（DeepSeek/GLM/GPT 等）选 openai；Anthropic 原生接口选 claude">
+            <Select options={[
+              { value: 'openai', label: 'OpenAI 兼容' },
+              { value: 'claude', label: 'Claude (Anthropic)' },
+            ]} />
+          </Form.Item>
           <Form.Item name="modelId" label="Model ID" rules={[{ required: true }]}><Input placeholder="claude-sonnet-4-20250514" /></Form.Item>
           <Form.Item name="apiUrl" label="API URL" rules={[{ required: true }]}><Input placeholder="https://api.anthropic.com/v1" /></Form.Item>
-          <Form.Item name="apiKey" label="API Key"><Input.Password placeholder="sk-..." /></Form.Item>
+          <Form.Item name="apiKey" label="API Key（加密存储）"
+            tooltip="保存后以 AES-GCM 加密存储，不会回显明文；编辑时留空表示沿用已存密钥">
+            <Input.Password placeholder={editing ? '留空表示不修改（已加密存储）' : 'sk-...'} />
+          </Form.Item>
           <Form.Item name="maxTokens" label="Max Tokens"><Input type="number" /></Form.Item>
           <Form.Item name="temperature" label="Temperature"><Input type="number" step={0.1} /></Form.Item>
           <Form.Item name="weight" label="路由权重"><Input type="number" /></Form.Item>

@@ -2,7 +2,7 @@ package io.yuan.octopus.service;
 
 import io.yuan.octopus.common.BuildTool;
 import io.yuan.octopus.common.JavaVersion;
-import io.yuan.octopus.domain.JavaProject;
+import io.yuan.octopus.domain.DiscoveredProject;
 import io.yuan.octopus.entity.RepoSnapshot;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,13 +42,13 @@ public class ProjectScanService {
         this.javaVersionDetector = javaVersionDetector;
     }
 
-    public List<JavaProject> scanProjects(RepoSnapshot snapshot) {
+    public List<DiscoveredProject> scanProjects(RepoSnapshot snapshot) {
         Path repoRoot = snapshot.repoLocalPath();
         if (!Files.isDirectory(repoRoot)) {
             return List.of();
         }
 
-        List<JavaProject> projects = new ArrayList<>();
+        List<DiscoveredProject> projects = new ArrayList<>();
 
         try {
             Files.walkFileTree(repoRoot, new SimpleFileVisitor<>() {
@@ -116,7 +116,7 @@ public class ProjectScanService {
         return false;
     }
 
-    private Optional<JavaProject> createJavaProject(Path dir, BuildTool buildTool) {
+    private Optional<DiscoveredProject> createJavaProject(Path dir, BuildTool buildTool) {
         String projectName = dir.getFileName().toString();
         Path srcMainJava = dir.resolve("src/main/java");
         List<Path> sourceDirectories = Files.isDirectory(srcMainJava)
@@ -133,10 +133,10 @@ public class ProjectScanService {
 
         JavaVersion javaVersion = javaVersionDetector.detectVersion(dir, buildTool);
 
-        return Optional.of(new JavaProject(projectName, dir, buildTool, sourceDirectories, javaVersion));
+        return Optional.of(new DiscoveredProject(projectName, dir, buildTool, sourceDirectories, javaVersion));
     }
 
-    public JavaProject scanSingleProject(Path projectDir, String projectName) {
+    public DiscoveredProject scanSingleProject(Path projectDir, String projectName) {
         BuildTool buildTool = detectBuildTool(projectDir);
         Path srcMainJava = projectDir.resolve("src/main/java");
         List<Path> sourceDirectories = Files.isDirectory(srcMainJava)
@@ -144,6 +144,6 @@ public class ProjectScanService {
                 : List.of();
         JavaVersion javaVersion = javaVersionDetector.detectVersion(projectDir,
                 buildTool != null ? buildTool : BuildTool.MAVEN);
-        return new JavaProject(projectName, projectDir, buildTool, sourceDirectories, javaVersion);
+        return new DiscoveredProject(projectName, projectDir, buildTool, sourceDirectories, javaVersion);
     }
 }

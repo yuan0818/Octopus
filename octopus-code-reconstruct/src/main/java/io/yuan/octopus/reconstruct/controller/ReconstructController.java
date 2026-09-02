@@ -32,6 +32,12 @@ public class ReconstructController {
         this.apiEndpointDetector = apiEndpointDetector;
     }
 
+    /**
+     * 源码重建。
+     * <p>
+     * 新增可选参数 {@code branch}、{@code commitId}，缺省 = HEAD。
+     * 指定 {@code commitId} 时优先通过 JGit 从 git 读取源码，失败时回退 MySQL 缓存。
+     */
     @PostMapping("/reconstruct")
     public Result<ReconstructResponse> reconstruct(@Valid @RequestBody ReconstructRequest request) {
         try {
@@ -44,17 +50,20 @@ public class ReconstructController {
 
     /**
      * 调用链元数据——只返回调用链结构树（类名 + 方法签名），不包含源码。
+     * <p>
+     * 新增可选参数 {@code branch}、{@code commitId}，透传到 DAO 层用于版本过滤。
      */
     @GetMapping("/chain-metadata")
     public Result<ChainMetadataResponse> chainMetadata(
             @RequestParam @NotNull Long projectId,
             @RequestParam @NotBlank String className,
             @RequestParam @NotBlank String methodName,
-            @RequestParam(defaultValue = "BFS") String strategy) {
+            @RequestParam(defaultValue = "BFS") String strategy,
+            @RequestParam(required = false) String branch,
+            @RequestParam(required = false) String commitId) {
 
-        CallChainResult chain = chainCollector.collect(projectId, className, methodName, strategy);
+        CallChainResult chain = chainCollector.collect(projectId, className, methodName, strategy, branch, commitId);
 
-        // Build a tree structure from the flat list
         Map<String, Object> tree = buildChainTree(chain);
 
         ChainMetadataResponse response = new ChainMetadataResponse(
@@ -69,24 +78,25 @@ public class ReconstructController {
 
     /**
      * 反向调用链——从任意方法出发，向上追溯调用者，找到 API 端点。
+     * <p>
+     * 新增可选参数 {@code branch}、{@code commitId}，透传到 DAO 层用于版本过滤。
      */
     @GetMapping("/reverse-chain")
     public Result<ReverseChainResponse> reverseChain(
             @RequestParam @NotNull Long projectId,
             @RequestParam @NotBlank String className,
             @RequestParam @NotBlank String methodName,
-            @RequestParam(defaultValue = "BFS") String strategy) {
+            @RequestParam(defaultValue = "BFS") String strategy,
+            @RequestParam(required = false) String branch,
+            @RequestParam(required = false) String commitId) {
 
-        // Collect upstream callers
-        CallChainResult upstream = chainCollector.collectUpstream(projectId, className, methodName, strategy);
+        CallChainResult upstream = chainCollector.collectUpstream(projectId, className, methodName, strategy, branch, commitId);
 
-        // Find API endpoints among upstream classes
         List<ApiEndpointDetector.ApiEndpoint> endpoints = List.of();
         if (!upstream.involvedClasses().isEmpty()) {
             endpoints = apiEndpointDetector.detect(projectId, upstream.involvedClasses());
         }
 
-        // Compute shortest path for each endpoint
         List<EndpointPath> endpointPaths = endpoints.stream()
                 .map(ep -> {
                     String pathSummary = computeShortestPath(upstream, className, methodName, ep);
@@ -104,7 +114,7 @@ public class ReconstructController {
         return Result.success(response);
     }
 
-    // ── Response DTOs (inline for now) ──
+    // ── Response DTOs (inline) ──
 
     public record ChainMetadataResponse(
             String anchor,
@@ -134,7 +144,6 @@ public class ReconstructController {
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> buildChainTree(CallChainResult chain) {
-        // Build a hierarchical tree from classToSigs
         Map<String, Object> tree = new LinkedHashMap<>();
         tree.put("anchor", chain.anchorClass() + "." + chain.anchorMethod());
 
@@ -152,8 +161,6 @@ public class ReconstructController {
 
     private String computeShortestPath(CallChainResult chain, String targetClass,
                                         String targetMethod, ApiEndpointDetector.ApiEndpoint endpoint) {
-        // Reconstruct the path by walking the parentMap from endpoint → target.
-        // parentMap maps: upstream_caller_signature → downstream_callee_signature
         String targetSig = targetClass + "." + targetMethod;
         String endpointSig = endpoint.className() + "." + endpoint.methodName();
 
@@ -161,7 +168,7 @@ public class ReconstructController {
         pathSegments.add(formatMethodRef(endpoint.className(), endpoint.methodName()));
 
         String current = endpointSig;
-        int maxSteps = 100; // safety limit
+        int maxSteps = 100;
         while (!current.equals(targetSig) && maxSteps-- > 0) {
             String next = chain.parentMap().get(current);
             if (next == null) break;
@@ -172,7 +179,6 @@ public class ReconstructController {
         }
 
         if (pathSegments.size() <= 1) {
-            // Fallback: simple placeholder
             return formatMethodRef(endpoint.className(), endpoint.methodName())
                     + " → ... → "
                     + formatMethodRef(targetClass, targetMethod);
@@ -189,7 +195,6 @@ public class ReconstructController {
     }
 
     private String extractMethodName(String signature) {
-        // signature format: "com.x.Class.method(params):ReturnType"
         int parenIdx = signature.indexOf('(');
         if (parenIdx < 0) return signature;
         int dotIdx = signature.lastIndexOf('.', parenIdx - 1);

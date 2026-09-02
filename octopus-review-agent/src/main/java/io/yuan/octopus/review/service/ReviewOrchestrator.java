@@ -132,18 +132,21 @@ public class ReviewOrchestrator {
 
         // 2. Chain metadata
         Map<String, Object> chainMetadata = codeRetrieval.getChainMetadata(
-                request.getProjectId(), request.getClassName(), request.getMethodName(), request.getStrategy());
+                request.getProjectId(), request.getClassName(), request.getMethodName(), request.getStrategy(),
+                request.getBranch(), request.getCommitId());
 
         // 3. Source code
         Map<String, String> sourceCode = codeRetrieval.getSourceCode(
-                request.getProjectId(), request.getClassName(), request.getMethodName(), request.getStrategy());
+                request.getProjectId(), request.getClassName(), request.getMethodName(), request.getStrategy(),
+                request.getBranch(), request.getCommitId());
 
         // 4. Parse requirements
         List<RequirementItem> requirements = requirementParser.parse(request);
 
         // 5. Build prompt
         String systemPrompt = promptBuilder.getSystemPrompt(skill);
-        String userPrompt = promptBuilder.build(skill, projectContext, chainMetadata, requirements, sourceCode, reviewMode);
+        String userPrompt = promptBuilder.build(skill, projectContext, chainMetadata, requirements,
+                sourceCode, reviewMode, request.getDiffContext());
 
         // Estimate tokens (rough: ~4 chars per token)
         int estimatedTokens = (systemPrompt.length() + userPrompt.length()) / 4;
@@ -226,15 +229,17 @@ public class ReviewOrchestrator {
         // 1. Project knowledge
         String projectContext = memoryManager.buildProjectContext(pid, request.getClassName());
 
-        // 2. Chain metadata
+        // 2. Chain metadata (version-aware: pass branch + commitId)
         log.info("[{}] Getting chain metadata for {}.{}", sessionId, request.getClassName(), request.getMethodName());
         Map<String, Object> chainMetadata = codeRetrieval.getChainMetadata(
-                request.getProjectId(), request.getClassName(), request.getMethodName(), request.getStrategy());
+                request.getProjectId(), request.getClassName(), request.getMethodName(), request.getStrategy(),
+                request.getBranch(), request.getCommitId());
 
-        // 3. Source code
+        // 3. Source code (version-aware: pass branch + commitId)
         log.info("[{}] Getting source code...", sessionId);
         Map<String, String> sourceCode = codeRetrieval.getSourceCode(
-                request.getProjectId(), request.getClassName(), request.getMethodName(), request.getStrategy());
+                request.getProjectId(), request.getClassName(), request.getMethodName(), request.getStrategy(),
+                request.getBranch(), request.getCommitId());
 
         // 4. Parse requirements
         List<RequirementItem> requirements = requirementParser.parse(request);
@@ -250,6 +255,7 @@ public class ReviewOrchestrator {
                 pid, request.getClassName(), request.getMethodName(),
                 request.getStrategy(), requirements,
                 projectContext, chainMetadata, sourceCode, llmConfig, reviewMode);
+        skillContext.setDiffContext(request.getDiffContext());
 
         SkillResult skillResult = skillExecutor.execute(skill, skillContext);
         if (!skillResult.success()) {
@@ -363,6 +369,7 @@ public class ReviewOrchestrator {
 
         // Populate config from DB model
         config.setProvider(modelConfig.getProvider());
+        config.setApiFormat(modelConfig.getApiFormat());
         config.setModel(modelConfig.getModelId());
         config.setApiKey(modelConfig.getApiKey());
         config.setApiUrl(modelConfig.getApiUrl());

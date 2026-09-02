@@ -54,6 +54,10 @@ public class CallGraphExtractor {
         node.put("modifiers", getModifiers(method));
         node.put("sourceFilePath", getSourcePath(psiClass));
         node.put("sourceCode", method.getBody() != null ? method.getBody().getText() : "");
+        // 行号：用于 ReconstructService 通过 JGit git show 按行号提取方法体。
+        // lineStart = 方法声明所在行；lineEnd = 方法体结束行。
+        node.put("lineStart", getLineNumber(method));
+        node.put("lineEnd", getEndLineNumber(method));
         return node;
     }
 
@@ -139,7 +143,54 @@ public class CallGraphExtractor {
         PsiDocumentManager docMgr = PsiDocumentManager.getInstance(project);
         com.intellij.openapi.editor.Document doc = docMgr.getDocument(element.getContainingFile());
         if (doc == null) return 0;
-        return doc.getLineNumber(element.getTextOffset()) + 1;
+        // Kotlin light 方法等非源码 PSI 元素的 getTextOffset() 可能为 -1，
+        // 直接传给 getLineNumber 会抛 IndexOutOfBoundsException 导致整个分析失败
+        int offset = element.getTextOffset();
+        if (offset < 0) {
+            com.intellij.openapi.util.TextRange range = element.getTextRange();
+            if (range == null) {
+                warnNoTextRange(element);
+                return 0;
+            }
+            offset = range.getStartOffset();
+        }
+        if (offset < 0 || offset > doc.getTextLength()) return 0;
+        return doc.getLineNumber(offset) + 1;
+    }
+
+    /**
+     * 返回元素结束行的行号（从 1 计数）。
+     * 用于方法体结束行号（含闭合大括号所在行）。
+     */
+    private int getEndLineNumber(PsiElement element) {
+        PsiDocumentManager docMgr = PsiDocumentManager.getInstance(project);
+        com.intellij.openapi.editor.Document doc = docMgr.getDocument(element.getContainingFile());
+        if (doc == null) return 0;
+        // 与 getLineNumber 同理：Kotlin light 方法 / 失效元素的 getTextRange() 可能为 null
+        com.intellij.openapi.util.TextRange range = element.getTextRange();
+        if (range == null) {
+            warnNoTextRange(element);
+            return 0;
+        }
+        // range.getEndOffset() - 1 是元素最后一个字符的 offset；
+        // 若直接用 getEndOffset()，当方法体以换行结尾时会指向下一行开头。
+        int endOffset = range.getEndOffset();
+        // 取方法文本最后一个非空白字符的位置
+        if (endOffset > 0) endOffset -= 1;
+        if (endOffset < 0 || endOffset >= doc.getTextLength()) return 0;
+        return doc.getLineNumber(endOffset) + 1;
+    }
+
+    /** 每个类只告警一次，用于定位无文本范围的 PSI 元素来源（如 Kotlin light 方法）。 */
+    private final Set<String> noTextRangeWarned = new HashSet<>();
+
+    private void warnNoTextRange(PsiElement element) {
+        String where = element instanceof PsiMethod m && m.getContainingClass() != null
+                ? String.valueOf(m.getContainingClass().getQualifiedName())
+                : String.valueOf(element);
+        if (noTextRangeWarned.add(where)) {
+            LOG.warn("PSI element without text range (line info set to 0): " + where);
+        }
     }
 
     private String resolveCallType(PsiMethodCallExpression expr) {

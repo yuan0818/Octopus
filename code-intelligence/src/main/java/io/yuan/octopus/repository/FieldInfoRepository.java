@@ -12,4 +12,6 @@ public interface FieldInfoRepository extends JpaRepository<FieldInfo, Long> {
     void deleteByClassIdIn(List<Long> classIds);
 
     List<FieldInfo> findByClassId(Long classId);
+
+    List<FieldInfo> findByClassIdIn(List<Long> classIds);
 }

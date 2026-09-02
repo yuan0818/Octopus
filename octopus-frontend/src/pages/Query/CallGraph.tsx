@@ -8,6 +8,8 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { queryApi } from '../../api/query';
+import { useBranchCommit } from '../../components/BranchCommitContext';
+import BranchCommitInlineSelector from '../../components/BranchCommitInlineSelector';
 import type { CallEdge, CallChainResult, CallChainItem, CallTraceDTO, MethodNodeInfo, ClassSummary, EntryPointInfo, ProjectInfo } from '../../types';
 
 const NODE_W = 280, NODE_H = 68;
@@ -96,6 +98,7 @@ const entryTypeColor: Record<string, string> = { HTTP_API: 'blue', MESSAGE_LISTE
 export default function CallGraph() {
   const { message } = App.useApp();
   const navigate = useNavigate();
+  const { branch, commitId, setBranch, setCommitId } = useBranchCommit();
   const [activeMode, setActiveMode] = useState<'browse' | 'search'>('browse');
 
   // ── Search mode state ──
@@ -120,6 +123,7 @@ export default function CallGraph() {
   const [entryPoints, setEntryPoints] = useState<EntryPointInfo[]>([]);
   const [entryPointsLoading, setEntryPointsLoading] = useState(false);
 
+
   const goToClass = useCallback((name: string) => { navigate(`/query/class?name=${encodeURIComponent(name)}`); }, [navigate]);
 
   const [implModalOpen, setImplModalOpen] = useState(false);
@@ -143,9 +147,9 @@ export default function CallGraph() {
       return;
     }
     setEntryPointsLoading(true);
-    try { const r = await queryApi.entryPoints(projectId); setEntryPoints(r.data); } catch { setEntryPoints([]); }
+    try { const r = await queryApi.entryPoints(projectId, undefined, branch, commitId); setEntryPoints(r.data); } catch { setEntryPoints([]); }
     setEntryPointsLoading(false);
-  }, []);
+  }, [branch, commitId]);
   useEffect(() => { loadEntryPoints(selectedProjectId); }, [selectedProjectId, loadEntryPoints]);
 
   // ── Flow graph ──
@@ -186,9 +190,9 @@ export default function CallGraph() {
     if (!rc || !rm) { message.warning('请输入类名和方法名'); return; }
     setLoading(true);
     try {
-      if (type === 'callers') { const r = await queryApi.callers(rc, rm); setCallers(r.data); }
-      else if (type === 'callees') { const r = await queryApi.callees(rc, rm); setCallees(r.data); }
-      else { const r = await queryApi.callChain(rc, rm); setSelectedPathIdx(null); setChain(r.data); }
+      if (type === 'callers') { const r = await queryApi.callers(rc, rm, branch, commitId); setCallers(r.data); }
+      else if (type === 'callees') { const r = await queryApi.callees(rc, rm, branch, commitId); setCallees(r.data); }
+      else { const r = await queryApi.callChain(rc, rm, undefined, branch, commitId); setSelectedPathIdx(null); setChain(r.data); }
       setResultTab(type);
     } catch { message.error('查询失败'); }
     setLoading(false);
@@ -197,7 +201,7 @@ export default function CallGraph() {
   const searchTrace = async () => {
     if (!className || !methodName) { message.warning('请输入类名和方法名'); return; }
     setLoading(true);
-    try { const r = await queryApi.traceMethod(className, methodName, traceDepth); setTrace(r.data); setResultTab('trace'); } catch { message.error('查询失败'); }
+    try { const r = await queryApi.traceMethod(className, methodName, traceDepth, branch, commitId); setTrace(r.data); setResultTab('trace'); } catch { message.error('查询失败'); }
     setLoading(false);
   };
 
@@ -205,7 +209,7 @@ export default function CallGraph() {
     if (!className || !methodName) { message.warning('请输入类名和方法名'); return; }
     setReverseLoading(true);
     try {
-      const r = await queryApi.reverseChain(selectedProjectId ?? 1, className, methodName);
+      const r = await queryApi.reverseChain(selectedProjectId ?? 1, className, methodName, undefined, branch, commitId);
       setReverseEndpoints(r.data?.endpoints ?? []);
       setResultTab('reverse');
     } catch { message.error('查询失败'); }
@@ -258,9 +262,28 @@ export default function CallGraph() {
               <FolderOpenOutlined /> 按项目浏览入口（API 优先）
             </div>
             {activeMode === 'browse' && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Select style={{ minWidth: 200 }} value={selectedProjectId} onChange={v => setSelectedProjectId(v)} placeholder="选择项目"
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <Select style={{ minWidth: 200 }} value={selectedProjectId}
+                  onChange={(v) => {
+                    setSelectedProjectId(v);
+                    const p = projects.find(x => x.id === v);
+                    if (p) {
+                      // 切项目时用项目自带 branch/commitId 作初值，避免残留上一项目的版本选择
+                      setBranch(p.branch);
+                      setCommitId(p.commitId);
+                    }
+                  }}
+                  placeholder="选择项目"
                   options={projects.map(p => ({ value: p.id, label: p.projectName }))} allowClear />
+                <BranchCommitInlineSelector
+                  projectId={selectedProjectId ?? null}
+                  branch={branch}
+                  commitId={commitId}
+                  onBranchChange={setBranch}
+                  onCommitChange={setCommitId}
+                  fallbackBranch={projects.find(p => p.id === selectedProjectId)?.branch}
+                  fallbackCommitId={projects.find(p => p.id === selectedProjectId)?.commitId}
+                />
                 <span style={{ color: '#888', fontSize: 12 }}>{entryPoints.length} 个入口</span>
               </div>
             )}

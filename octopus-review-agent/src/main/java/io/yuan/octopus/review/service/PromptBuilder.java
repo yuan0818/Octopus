@@ -58,6 +58,19 @@ public class PromptBuilder {
                         List<RequirementItem> requirements,
                         Map<String, String> sourceCode,
                         ReviewMode reviewMode) {
+        return build(skill, projectContext, chainMetadata, requirements, sourceCode, reviewMode, null);
+    }
+
+    /**
+     * @param diffContext 链路版本对比摘要（entry-chain-diff 的输出，可选）；
+     *                    非空时注入 Diff Context 段落，作为 issue.diffEvidence 的事实来源
+     */
+    public String build(Skill skill, String projectContext,
+                        Map<String, Object> chainMetadata,
+                        List<RequirementItem> requirements,
+                        Map<String, String> sourceCode,
+                        ReviewMode reviewMode,
+                        String diffContext) {
         PromptTemplate template = promptManager.get(skill.getPromptTemplateId());
 
         // Prepare variables
@@ -70,6 +83,10 @@ public class PromptBuilder {
         variables.put("sourceCode", formatSourceCode(sourceCode));
 
         String prompt = template.renderUserPrompt(variables);
+        if (diffContext != null && !diffContext.isBlank()) {
+            prompt = "## Diff Context（本次链路版本对比）\n" + diffContext.strip()
+                    + "\n\n以上 diff 是该入口在两个版本间的链路变更，引用时作为 diffEvidence。\n\n" + prompt;
+        }
         if (!prompt.contains(reviewMode.name())) {
             prompt = "## Review Mode\n" + reviewMode.name() + "\n\n"
                     + reviewModeInstructions(reviewMode) + "\n\n" + prompt;
@@ -118,8 +135,9 @@ public class PromptBuilder {
 
     private String formatSourceCode(Map<String, String> sourceCode) {
         if (sourceCode == null || sourceCode.isEmpty()) return "无源码";
+        // 不带语言扩展名：语言由模型从代码内容自行识别，prompt 保持语言中立
         return sourceCode.entrySet().stream()
-                .map(entry -> "--- " + entry.getKey() + ".java ---\n" + entry.getValue())
+                .map(entry -> "--- " + entry.getKey() + " ---\n" + entry.getValue())
                 .collect(Collectors.joining("\n\n"));
     }
 }

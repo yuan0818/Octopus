@@ -13,6 +13,7 @@ import EndpointsPage from './pages/Query/Endpoints';
 import ReviewPage from './pages/Review';
 import ReviewHistoryPage from './pages/ReviewHistory';
 import AdminPage from './pages/Admin';
+import ChangeSummaryPage from './pages/ChangeSummary';
 
 export default function App() {
   return (
@@ -28,6 +29,7 @@ export default function App() {
             <Route path="/query/callgraph" element={<CallGraph />} />
             <Route path="/query/class" element={<ClassDetail />} />
             <Route path="/query/endpoints" element={<EndpointsPage />} />
+            <Route path="/change-summary" element={<ChangeSummaryPage />} />
             <Route path="/review" element={<ReviewPage />} />
             <Route path="/review/history" element={<ReviewHistoryPage />} />
             <Route path="/admin" element={<AdminPage />} />

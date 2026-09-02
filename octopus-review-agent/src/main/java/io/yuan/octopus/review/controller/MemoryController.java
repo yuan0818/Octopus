@@ -90,12 +90,13 @@ public class MemoryController {
             @RequestParam String projectId,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String anchorClass,
+            @RequestParam(required = false) String commitId,
             @RequestParam(required = false) LocalDateTime startTime,
             @RequestParam(required = false) LocalDateTime endTime,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         Page<ReviewSession> result = memoryManager.getSessionsFiltered(
-                projectId, status, anchorClass, startTime, endTime, page, size);
+                projectId, status, anchorClass, startTime, endTime, commitId, page, size);
         return Result.success(Map.of(
                 "content", result.getContent(),
                 "totalElements", result.getTotalElements(),

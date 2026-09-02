@@ -2,19 +2,19 @@ package io.yuan.octopus.service;
 
 import io.yuan.octopus.analyzer.AnalysisContext;
 import io.yuan.octopus.analyzer.AnalysisDispatcher;
-import io.yuan.octopus.analyzer.JvmProjectAnalyzer;
+import io.yuan.octopus.analyzer.ProjectAnalyzer;
 import io.yuan.octopus.domain.CallEdge;
 import io.yuan.octopus.domain.CallGraph;
 import io.yuan.octopus.domain.MethodNode;
 import io.yuan.octopus.domain.DiffResult;
-import io.yuan.octopus.domain.JavaProject;
+import io.yuan.octopus.domain.DiscoveredProject;
 import io.yuan.octopus.domain.PSIAnalysisOutput;
 import io.yuan.octopus.domain.ParseResult;
 import io.yuan.octopus.domain.ParsedClass;
 import io.yuan.octopus.dto.request.LocalAnalysisRequest;
 import io.yuan.octopus.entity.*;
 import io.yuan.octopus.exception.ValidationException;
-import io.yuan.octopus.repository.JavaProjectRepository;
+import io.yuan.octopus.repository.AnalyzedProjectRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -42,7 +42,7 @@ public class AnalysisOrchestrationService {
     private final GraphStoreService graphStoreService;
     private final MetadataStoreService metadataStoreService;
     private final AnalysisTaskService analysisTaskService;
-    private final JavaProjectRepository javaProjectRepository;
+    private final AnalyzedProjectRepository javaProjectRepository;
     private final PSIExecutor psiExecutor;
     private final LocalGitDetector localGitDetector;
     private final BackendProjectFlagService backendProjectFlagService;
@@ -62,7 +62,7 @@ public class AnalysisOrchestrationService {
                                         GraphStoreService graphStoreService,
                                         MetadataStoreService metadataStoreService,
                                         AnalysisTaskService analysisTaskService,
-                                        JavaProjectRepository javaProjectRepository,
+                                        AnalyzedProjectRepository javaProjectRepository,
                                         BackendProjectFlagService backendProjectFlagService,
                                         PSIExecutor psiExecutor,
                                         LocalGitDetector localGitDetector,
@@ -171,8 +171,10 @@ public class AnalysisOrchestrationService {
             RepoSnapshot snapshot = new RepoSnapshot(resolvedPath,
                     "local://" + resolvedPath, detectedCommitId, null);
 
-            // Detect language via dispatcher
-            JvmProjectAnalyzer jvmAnalyzer = analysisDispatcher.getJvmAnalyzer();
+            // Detect language via dispatcher; fall back to JVM for directories
+            // without any recognized build/module files (preserves legacy behavior)
+            ProjectAnalyzer analyzer = analysisDispatcher.detectAnalyzer(resolvedPath)
+                    .orElseGet(analysisDispatcher::getJvmAnalyzer);
             AnalysisContext analysisCtx = new AnalysisContext(
                     resolvedPath, branch, detectedCommitId, null, task.getId());
 
@@ -188,11 +190,11 @@ public class AnalysisOrchestrationService {
                     List<String> stepDegraded = List.of();
                     switch (step.getStepName()) {
                         case "SCAN" -> {
-                            List<JavaProject> projects = jvmAnalyzer.scanProjects(snapshot);
+                            List<DiscoveredProject> projects = analyzer.scanProjects(snapshot);
                             if (projects.isEmpty()) {
-                                projects = List.of(jvmAnalyzer.scanSingleProject(resolvedPath, projectName));
+                                projects = List.of(analyzer.scanSingleProject(resolvedPath, projectName));
                             }
-                            stepDegraded = jvmAnalyzer.analyzeDeep(analysisCtx, projects, snapshot);
+                            stepDegraded = analyzer.analyzeDeep(analysisCtx, projects, snapshot);
                         }
                         case "PARSE_DEEP" -> {
                             // SCAN step already ran the full analysis; skip to avoid double-processing
@@ -333,6 +335,123 @@ public class AnalysisOrchestrationService {
         return analysisTaskService.getTask(taskId);
     }
 
+    /**
+     * Starts a full analysis of an already-merged local working tree for a Gerrit
+     * Change patchset (REQ-CTR-004, ADR-006). The merge tree and merge commit SHA
+     * are produced upstream by {@link GitService#mergePatchsetOntoBase}; this method
+     * skips the tag checkout (SYNC) and runs SCAN → PARSE_DEEP synchronously with
+     * {@code commitId = mergeCommitId}, relying on {@link MetadataStoreService} and
+     * {@link GraphStoreService} to flip {@code is_head} / {@code current} for the
+     * new version.
+     *
+     * <p>Runs <b>synchronously</b> on the caller's thread (the change-review consumer
+     * orchestrator), unlike {@link #startAnalysis} which returns immediately. On
+     * failure the underlying analysis_task is marked FAILED and the exception is
+     * rethrown so the orchestrator can mark the {@code change_review_task} as
+     * {@code FAILED(ANALYSIS_FAILED)} (the analysis_task row is transient step
+     * tracking; {@code change_review_task.currentPhase} is the durable truth — ADR-004).
+     *
+     * @param repoConfigId   repository configuration id
+     * @param branch         target branch of the Change
+     * @param mergeCommitId  merge commit SHA produced by the simulated merge (analysis commitId)
+     * @param localPath      local working tree already left on the merge commit
+     * @return the completed (or FAILED) analysis task
+     */
+    public AnalysisTask startChangeAnalysis(Long repoConfigId, String branch,
+                                            String mergeCommitId, Path localPath) {
+        RepoConfig repoConfig = repoConfigService.getById(repoConfigId);
+        // SCAN + PARSE_DEEP steps only (no SYNC — merge tree already prepared).
+        AnalysisTask task = analysisTaskService.createLocalTask(repoConfigId, null, branch);
+        analysisTaskService.updateCommitId(task.getId(), mergeCommitId);
+        task.setCommitId(mergeCommitId);
+
+        String projectName = localPath.getFileName() != null
+                ? localPath.getFileName().toString() : GitService.extractRepoName(repoConfig.getRepoUrl());
+
+        runChangeAnalysisPipeline(task, localPath, projectName, branch, mergeCommitId);
+        return analysisTaskService.getTask(task.getId());
+    }
+
+    /**
+     * Synchronous SCAN → PARSE_DEEP pipeline for a change-triggered merge tree.
+     * Mirrors {@link #runLocalPipeline} but runs on the caller's thread and
+     * rethrows failures so the change-review orchestrator can fail the task.
+     */
+    private void runChangeAnalysisPipeline(AnalysisTask task, Path localPath, String projectName,
+                                           String branch, String mergeCommitId) {
+        MDC.put("taskId", String.valueOf(task.getId()));
+        try {
+            List<AnalysisTaskStep> steps = analysisTaskService.getSteps(task.getId());
+            Path resolvedPath = localPath.toAbsolutePath().normalize();
+            RepoSnapshot snapshot = new RepoSnapshot(resolvedPath,
+                    "change-merge://" + resolvedPath, mergeCommitId, null);
+
+            ProjectAnalyzer analyzer = analysisDispatcher.detectAnalyzer(resolvedPath)
+                    .orElseGet(analysisDispatcher::getJvmAnalyzer);
+            AnalysisContext analysisCtx = new AnalysisContext(
+                    resolvedPath, branch, mergeCommitId, task.getRepoConfigId(), task.getId());
+
+            List<DiscoveredProject> projects = null;
+            for (AnalysisTaskStep step : steps) {
+                if ("COMPLETED".equals(step.getStatus()) || "SKIPPED".equals(step.getStatus())
+                        || "DEGRADED".equals(step.getStatus())) {
+                    continue;
+                }
+
+                analysisTaskService.updateStepStatus(step.getId(), "RUNNING", null);
+
+                try {
+                    List<String> stepDegraded = List.of();
+                    switch (step.getStepName()) {
+                        case "SCAN" -> {
+                            projects = analyzer.scanProjects(snapshot);
+                            if (projects.isEmpty()) {
+                                projects = List.of(analyzer.scanSingleProject(resolvedPath, projectName));
+                            }
+                            stepDegraded = analyzer.analyzeDeep(analysisCtx, projects, snapshot);
+                        }
+                        case "PARSE_DEEP" -> log.debug("PARSE_DEEP step skipped for change analysis (already processed during SCAN)");
+                    }
+
+                    String stepStatus = stepDegraded.isEmpty() ? "COMPLETED" : "DEGRADED";
+                    String stepWarning = stepDegraded.isEmpty() ? null
+                            : "PSI unavailable (JavaParser fallback) for: " + String.join(", ", stepDegraded);
+                    analysisTaskService.updateStepStatus(step.getId(), stepStatus, stepWarning);
+
+                } catch (Exception e) {
+                    log.error("Step {} failed for change analysis task {}: {}", step.getStepName(), task.getId(), e.getMessage(), e);
+                    analysisTaskService.updateStepStatus(step.getId(), "FAILED", e.getMessage());
+                    analysisTaskService.updateTaskStatus(task.getId(), "FAILED", e.getMessage());
+                    throw new AnalysisFailedException("Change analysis failed at step "
+                            + step.getStepName() + ": " + e.getMessage(), e);
+                }
+            }
+
+            // Keep java_project.commit_id consistent with the merge commit (is_head=true),
+            // so PathQueryService.resolveEffectiveCommit's HEAD fallback is not misled.
+            // analyzedTag stays null (change-review is not tag-driven).
+            if (projects != null) {
+                markProjectsAnalyzed(projects, task.getRepoConfigId(), branch, task);
+            }
+            analysisTaskService.updateTaskStatus(task.getId(), "COMPLETED", null);
+        } catch (AnalysisFailedException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Unhandled exception in change analysis task {}: {}", task.getId(), e.getMessage(), e);
+            safeUpdateTaskFailed(task.getId(), "Internal error: " + e.getMessage());
+            throw new AnalysisFailedException("Change analysis failed: " + e.getMessage(), e);
+        } finally {
+            MDC.remove("taskId");
+        }
+    }
+
+    /** Signals that a change-triggered analysis failed (REQ-CTR-004 → ANALYSIS_FAILED). */
+    public static class AnalysisFailedException extends RuntimeException {
+        public AnalysisFailedException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Pipeline execution
     // -------------------------------------------------------------------------
@@ -341,7 +460,7 @@ public class AnalysisOrchestrationService {
                                  RepoConfig repoConfig, int startIndex) {
         RepoSnapshot snapshot = null;
         Optional<DiffResult> diffResult = Optional.empty();
-        List<JavaProject> projects = null;
+        List<DiscoveredProject> projects = null;
         String branch = repoConfig.getBranch();
         String branchBaselineTag = null;
 
@@ -448,7 +567,7 @@ public class AnalysisOrchestrationService {
     // -------------------------------------------------------------------------
 
     private List<String> processProjectsDeep(AnalysisTask task,
-                                     List<JavaProject> projects,
+                                     List<DiscoveredProject> projects,
                                      Long repoConfigId,
                                      String branch, RepoSnapshot snapshot,
                                      String branchBaselineTag, Optional<DiffResult> branchDiffResult) {
@@ -460,13 +579,13 @@ public class AnalysisOrchestrationService {
                 .toList();
 
         // --- Phase 0: parse all projects and compute per-project diffs ---
-        record ProjectContext(JavaProject project, JavaProjectEntity entity,
+        record ProjectContext(DiscoveredProject project, AnalyzedProjectEntity entity,
                               PSIAnalysisOutput psiOutput, ParseResult parseResult,
                               Optional<DiffResult> projectDiff) {}
         List<ProjectContext> contexts = new ArrayList<>();
 
-        for (JavaProject project : projects) {
-            JavaProjectEntity projectEntity = findOrCreateProjectEntity(project, repoConfigId, branch);
+        for (DiscoveredProject project : projects) {
+            AnalyzedProjectEntity projectEntity = findOrCreateProjectEntity(project, repoConfigId, branch);
             Optional<DiffResult> projectDiff = resolveProjectDiff(projectEntity, project, snapshot,
                     branchBaselineTag, branchDiffResult, task.getTag());
 
@@ -493,7 +612,7 @@ public class AnalysisOrchestrationService {
                 .toList();
 
         // --- Phase 1: build graphs, store nodes + metadata ---
-        record GraphEntry(JavaProjectEntity entity, CallGraph callGraph,
+        record GraphEntry(AnalyzedProjectEntity entity, CallGraph callGraph,
                           ParseResult parseResult, Optional<DiffResult> projectDiff) {}
         List<GraphEntry> graphEntries = new ArrayList<>();
 
@@ -515,7 +634,7 @@ public class AnalysisOrchestrationService {
             graphStoreService.clearProjectGraph(ctx.entity().getId(), branch, task.getCommitId());
             graphStoreService.storeNodes(ctx.entity().getId(), branch, task.getCommitId(), callGraph.nodes());
 
-            metadataStoreService.storeMetadata(ctx.entity().getId(), branch, ctx.parseResult());
+            metadataStoreService.storeMetadata(ctx.entity().getId(), branch, task.getCommitId(), ctx.parseResult());
 
             backendProjectFlagService.updateBackendProjectFlag(ctx.entity());
             graphEntries.add(new GraphEntry(ctx.entity(), callGraph, ctx.parseResult(), ctx.projectDiff()));
@@ -535,12 +654,12 @@ public class AnalysisOrchestrationService {
     // -------------------------------------------------------------------------
 
     private void processProjects(AnalysisTask task, String stepName,
-                                 List<JavaProject> projects,
+                                 List<DiscoveredProject> projects,
                                  Long repoConfigId,
                                  String branch, RepoSnapshot snapshot,
                                  String branchBaselineTag, Optional<DiffResult> branchDiffResult) {
-        for (JavaProject project : projects) {
-            JavaProjectEntity projectEntity = findOrCreateProjectEntity(project, repoConfigId, branch);
+        for (DiscoveredProject project : projects) {
+            AnalyzedProjectEntity projectEntity = findOrCreateProjectEntity(project, repoConfigId, branch);
             Optional<DiffResult> projectDiff = resolveProjectDiff(projectEntity, project, snapshot,
                     branchBaselineTag, branchDiffResult, task.getTag());
 
@@ -565,10 +684,10 @@ public class AnalysisOrchestrationService {
                     if (projectDiff.isPresent()) {
                         DiffResult dr = projectDiff.get();
                         ParseResult parseResult = codeParseService.parseFiles(project, dr.changedFilePaths());
-                        metadataStoreService.updateMetadataDiff(projectEntity.getId(), branch, parseResult, dr);
+                        metadataStoreService.updateMetadataDiff(projectEntity.getId(), branch, task.getCommitId(), parseResult, dr);
                     } else {
                         ParseResult parseResult = codeParseService.parseProject(project);
-                        metadataStoreService.storeMetadata(projectEntity.getId(), branch, parseResult);
+                        metadataStoreService.storeMetadata(projectEntity.getId(), branch, task.getCommitId(), parseResult);
                     }
                     backendProjectFlagService.updateBackendProjectFlag(projectEntity);
                 }
@@ -576,8 +695,8 @@ public class AnalysisOrchestrationService {
         }
     }
 
-    private Optional<DiffResult> resolveProjectDiff(JavaProjectEntity projectEntity,
-                                                    JavaProject project,
+    private Optional<DiffResult> resolveProjectDiff(AnalyzedProjectEntity projectEntity,
+                                                    DiscoveredProject project,
                                                     RepoSnapshot snapshot,
                                                     String branchBaselineTag,
                                                     Optional<DiffResult> branchDiffResult,
@@ -601,7 +720,7 @@ public class AnalysisOrchestrationService {
      * Filters a repository-level {@link DiffResult} down to files that reside under
      * any source directory of the given project.
      */
-    private DiffResult filterForProject(DiffResult diff, JavaProject project) {
+    private DiffResult filterForProject(DiffResult diff, DiscoveredProject project) {
         Set<String> sourceDirs = project.sourceDirectories().stream()
                 .map(p -> p.toString() + java.io.File.separator)
                 .collect(Collectors.toSet());
@@ -617,7 +736,7 @@ public class AnalysisOrchestrationService {
         return new DiffResult(changed, deleted);
     }
 
-    private void copyCurrentGraphForUnchangedCommit(List<JavaProject> projects, Long repoConfigId,
+    private void copyCurrentGraphForUnchangedCommit(List<DiscoveredProject> projects, Long repoConfigId,
                                                     String branch, String commitId) {
         List<Long> projectIds = projects.stream()
                 .map(project -> findOrCreateProjectEntity(project, repoConfigId, branch).getId())
@@ -634,16 +753,16 @@ public class AnalysisOrchestrationService {
     private String getPreviousTag(Long repoConfigId, String branch) {
         return javaProjectRepository
                 .findFirstByRepoConfigIdAndBranchAndAnalyzedTagIsNotNullOrderByAnalyzedAtDescIdDesc(repoConfigId, branch)
-                .map(JavaProjectEntity::getAnalyzedTag)
+                .map(AnalyzedProjectEntity::getAnalyzedTag)
                 .orElse(null);
     }
 
-    private JavaProjectEntity findOrCreateProjectEntity(JavaProject project, Long repoConfigId,
+    private AnalyzedProjectEntity findOrCreateProjectEntity(DiscoveredProject project, Long repoConfigId,
                                                         String branch) {
         return javaProjectRepository
                 .findByRepoConfigIdAndBranchAndProjectName(repoConfigId, branch, project.projectName())
                 .orElseGet(() -> {
-                    JavaProjectEntity entity = JavaProjectEntity.builder()
+                    AnalyzedProjectEntity entity = AnalyzedProjectEntity.builder()
                             .repoConfigId(repoConfigId)
                             .branch(branch)
                             .projectName(project.projectName())
@@ -655,12 +774,12 @@ public class AnalysisOrchestrationService {
                 });
     }
 
-    private void markProjectsAnalyzed(List<JavaProject> projects, Long repoConfigId,
+    private void markProjectsAnalyzed(List<DiscoveredProject> projects, Long repoConfigId,
                                       String branch, AnalysisTask task) {
         LocalDateTime now = LocalDateTime.now();
-        for (JavaProject project : projects) {
+        for (DiscoveredProject project : projects) {
             if (repoConfigId == null) {
-                // Local project: look up by canonical path
+                // Local project: look up by canonical path + branch (per-branch rows)
                 String canonicalPath = project.projectPath().toAbsolutePath().normalize().toString();
                 javaProjectRepository.findByRepoConfigIdIsNullAndProjectPath(canonicalPath)
                         .ifPresent(entity -> {
@@ -673,7 +792,11 @@ public class AnalysisOrchestrationService {
                         .findByRepoConfigIdAndBranchAndProjectName(repoConfigId, branch, project.projectName())
                         .ifPresent(entity -> {
                             entity.setCommitId(task.getCommitId());
-                            entity.setAnalyzedTag(task.getTag());
+                            // change 触发的分析 task.tag 为 null：不能清空 tag 基线，
+                            // 否则下次 tag 增量分析退化（getPreviousTag 拿不到上一版本）
+                            if (task.getTag() != null) {
+                                entity.setAnalyzedTag(task.getTag());
+                            }
                             entity.setAnalyzedAt(now);
                             javaProjectRepository.save(entity);
                         });

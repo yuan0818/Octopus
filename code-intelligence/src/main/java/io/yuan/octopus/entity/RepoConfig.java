@@ -29,6 +29,20 @@ public class RepoConfig {
     @Column(name = "auth_type", nullable = false, length = 20)
     private AuthType authType;
 
+    // ── 平台集成字段（只读；由 octopus-code-base CRUD 写入，code-intelligence 读取供 Gerrit 操作用，ADR-003） ──
+
+    @Column(name = "platform", nullable = false, length = 20)
+    private String platform = "NONE";   // NONE / GERRIT / GITLAB(预留)
+
+    @Column(name = "platform_url", length = 500)
+    private String platformUrl;        // 如 https://gerrit.example.com
+
+    @Column(name = "platform_token_encrypted", length = 500)
+    private String platformTokenEncrypted;  // Gerrit REST 凭证（加密）
+
+    @Column(name = "webhook_secret_encrypted", length = 500)
+    private String webhookSecretEncrypted;  // webhook 校验 secret（加密）
+
     @Column(name = "http_username", length = 200)
     private String httpUsername;
 

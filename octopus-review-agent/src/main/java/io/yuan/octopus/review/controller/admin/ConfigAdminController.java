@@ -4,7 +4,6 @@ import io.yuan.octopus.infra.common.Result;
 import io.yuan.octopus.review.model.ModelRegistry;
 import io.yuan.octopus.review.prompt.PromptManager;
 import io.yuan.octopus.review.skill.SkillRegistry;
-import io.yuan.octopus.review.tool.ToolRegistry;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -17,14 +16,12 @@ public class ConfigAdminController {
     private final ModelRegistry modelRegistry;
     private final PromptManager promptManager;
     private final SkillRegistry skillRegistry;
-    private final ToolRegistry toolRegistry;
 
     public ConfigAdminController(ModelRegistry modelRegistry, PromptManager promptManager,
-                                  SkillRegistry skillRegistry, ToolRegistry toolRegistry) {
+                                  SkillRegistry skillRegistry) {
         this.modelRegistry = modelRegistry;
         this.promptManager = promptManager;
         this.skillRegistry = skillRegistry;
-        this.toolRegistry = toolRegistry;
     }
 
     @GetMapping("/api-keys")
@@ -70,9 +67,6 @@ public class ConfigAdminController {
 
         // Skills
         status.put("skills", skillRegistry.getEnabledSkills().size());
-
-        // Tools
-        status.put("tools", toolRegistry.getAll().size());
 
         // Readiness
         boolean ready = modelRegistry.getAvailableModels().size() > 0

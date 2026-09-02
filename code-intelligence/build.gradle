@@ -17,10 +17,12 @@ dependencies {
     implementation project(':octopus-infra:infra-neo4j')
     implementation project(':octopus-infra:infra-mysql')
     implementation project(':octopus-infra:infra-jgit')
+    implementation project(':octopus-infra:infra-memory')
 
     // ── Spring Boot ─────────────────────────────────────────────
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-amqp'
 
     // ── Core dependencies ───────────────────────────────────────
     implementation 'org.eclipse.jgit:org.eclipse.jgit'

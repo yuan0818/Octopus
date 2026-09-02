@@ -9,7 +9,8 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "review_session", indexes = {
     @Index(name = "idx_project", columnList = "project_id, created_at"),
-    @Index(name = "idx_anchor", columnList = "project_id, anchor_class, anchor_method")
+    @Index(name = "idx_anchor", columnList = "project_id, anchor_class, anchor_method"),
+    @Index(name = "idx_rs_change", columnList = "change_review_task_id")
 })
 public class ReviewSession {
 
@@ -34,6 +35,17 @@ public class ReviewSession {
 
     @Column(name = "tag", length = 200)
     private String tag;
+
+    // ── 变更触发审查关联（可空，既有非 change 触发的 review 为 null） ──
+
+    @Column(name = "change_number", length = 50)
+    private String changeNumber;
+
+    @Column(name = "patchset_number")
+    private Integer patchsetNumber;
+
+    @Column(name = "change_review_task_id")
+    private Long changeReviewTaskId;
 
     @Column(name = "requirements", columnDefinition = "JSON")
     private String requirements;
@@ -98,6 +110,15 @@ public class ReviewSession {
 
     public String getTag() { return tag; }
     public void setTag(String tag) { this.tag = tag; }
+
+    public String getChangeNumber() { return changeNumber; }
+    public void setChangeNumber(String changeNumber) { this.changeNumber = changeNumber; }
+
+    public Integer getPatchsetNumber() { return patchsetNumber; }
+    public void setPatchsetNumber(Integer patchsetNumber) { this.patchsetNumber = patchsetNumber; }
+
+    public Long getChangeReviewTaskId() { return changeReviewTaskId; }
+    public void setChangeReviewTaskId(Long changeReviewTaskId) { this.changeReviewTaskId = changeReviewTaskId; }
 
     public String getRequirements() { return requirements; }
     public void setRequirements(String requirements) { this.requirements = requirements; }

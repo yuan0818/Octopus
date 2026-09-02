@@ -16,6 +16,7 @@ import org.neo4j.driver.types.Path;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Service
@@ -27,7 +28,9 @@ public class QueryService {
     private static final String ENTRY_TYPE_ROOT_METHOD = "ROOT_METHOD";
 
     private static final List<String> HTTP_METHOD_ANNOTATIONS = List.of(
-        "GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping", "RequestMapping"
+        "GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping", "RequestMapping",
+        // Go 合成注解（go-project-analyzer 的 HTTP 路由识别），params 携带 path/method
+        "HttpRoute"
     );
     private static final List<String> MESSAGE_LISTENER_ANNOTATIONS = List.of(
         "EventListener", "KafkaListener", "RabbitListener", "JmsListener", "SqsListener", "RocketMQMessageListener"
@@ -41,8 +44,17 @@ public class QueryService {
     private final InheritanceRelationRepository inheritanceRelationRepository;
     private final ClassDependencyRepository classDependencyRepository;
     private final ClassInterfaceRelationRepository classInterfaceRelationRepository;
-    private final JavaProjectRepository javaProjectRepository;
+    private final AnalyzedProjectRepository javaProjectRepository;
+    private final GitService gitService;
+    private final RepoConfigService repoConfigService;
     private final Gson gson = new Gson();
+
+    /** branches/commits 列表缓存 TTL：这两个查询底层是远端 git fetch，开销大且变化不频繁。 */
+    private static final long GIT_LIST_CACHE_TTL_MILLIS = 5 * 60 * 1000L;
+    private final ConcurrentHashMap<Long, CachedGitList<List<BranchInfo>>> branchCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CachedGitList<List<CommitInfo>>> commitCache = new ConcurrentHashMap<>();
+
+    private record CachedGitList<T>(T value, long expiresAt) {}
 
     public QueryService(Driver neo4jDriver,
                         ClassInfoRepository classInfoRepository,
@@ -52,7 +64,9 @@ public class QueryService {
                         InheritanceRelationRepository inheritanceRelationRepository,
                         ClassDependencyRepository classDependencyRepository,
                         ClassInterfaceRelationRepository classInterfaceRelationRepository,
-                        JavaProjectRepository javaProjectRepository) {
+                        AnalyzedProjectRepository javaProjectRepository,
+                        GitService gitService,
+                        RepoConfigService repoConfigService) {
         this.neo4jDriver = neo4jDriver;
         this.classInfoRepository = classInfoRepository;
         this.methodInfoRepository = methodInfoRepository;
@@ -62,19 +76,62 @@ public class QueryService {
         this.classDependencyRepository = classDependencyRepository;
         this.classInterfaceRelationRepository = classInterfaceRelationRepository;
         this.javaProjectRepository = javaProjectRepository;
+        this.gitService = gitService;
+        this.repoConfigService = repoConfigService;
     }
 
     // ==================== Neo4j Query Methods ====================
 
-    public List<MethodEdgeDTO> getCallers(String qualifiedClassName, String methodName, List<String> paramTypes) {
+    /**
+     * 构造 Neo4j 版本过滤片段（对应 BR-DIFF-011）：
+     * commitId 为空 → 取 HEAD（current=true 或缺失）；commitId 非空 → 精确匹配 commitId。
+     */
+    private String versionFilter(String nodeAlias, String commitId) {
+        if (commitId == null || commitId.isBlank()) {
+            return "coalesce(" + nodeAlias + ".current, true) = true";
+        }
+        return nodeAlias + ".commitId = $commitId";
+    }
+
+    /**
+     * 判断是否为版本化查询（commitId 非空）。
+     */
+    private boolean isVersioned(String commitId) {
+        return commitId != null && !commitId.isBlank();
+    }
+
+    /**
+     * 构造 branch 过滤片段：branch 为空时不限制（跨分支），
+     * 非空时限定节点 branch 属性精确匹配。
+     */
+    private String branchFilter(String nodeAlias, String branch) {
+        if (branch == null || branch.isBlank()) {
+            return "true";
+        }
+        return nodeAlias + ".branch = $branch";
+    }
+
+    private boolean hasBranch(String branch) {
+        return branch != null && !branch.isBlank();
+    }
+
+    public List<MethodEdgeDTO> getCallers(String qualifiedClassName, String methodName,
+                                          List<String> paramTypes, String branch, String commitId) {
+        String callerFilter = versionFilter("caller", commitId);
+        String calleeFilter = versionFilter("callee", commitId);
         String cypher = """
             MATCH (caller:MethodNode)-[c:CALLS]->(callee:MethodNode)
             WHERE callee.qualifiedClassName = $className AND callee.methodName = $methodName
-              AND coalesce(caller.current, true) = true AND coalesce(callee.current, true) = true
+              AND %s AND %s AND %s AND %s
             RETURN caller, c.callType AS callType, c.lineNumber AS lineNumber
-            """;
+            """.formatted(callerFilter, calleeFilter, branchFilter("caller", branch), branchFilter("callee", branch));
         try (Session session = neo4jDriver.session()) {
-            Result result = session.run(cypher, Map.of("className", qualifiedClassName, "methodName", methodName));
+            Map<String, Object> params = new HashMap<>();
+            params.put("className", qualifiedClassName);
+            params.put("methodName", methodName);
+            if (isVersioned(commitId)) params.put("commitId", commitId);
+            if (hasBranch(branch)) params.put("branch", branch);
+            Result result = session.run(cypher, params);
             List<MethodEdgeDTO> callers = new ArrayList<>();
             while (result.hasNext()) {
                 Record record = result.next();
@@ -87,15 +144,23 @@ public class QueryService {
         }
     }
 
-    public List<MethodEdgeDTO> getCallees(String qualifiedClassName, String methodName, List<String> paramTypes) {
+    public List<MethodEdgeDTO> getCallees(String qualifiedClassName, String methodName,
+                                          List<String> paramTypes, String branch, String commitId) {
+        String callerFilter = versionFilter("caller", commitId);
+        String calleeFilter = versionFilter("callee", commitId);
         String cypher = """
             MATCH (caller:MethodNode)-[c:CALLS]->(callee:MethodNode)
             WHERE caller.qualifiedClassName = $className AND caller.methodName = $methodName
-              AND coalesce(caller.current, true) = true AND coalesce(callee.current, true) = true
+              AND %s AND %s AND %s AND %s
             RETURN callee, c.callType AS callType, c.lineNumber AS lineNumber
-            """;
+            """.formatted(callerFilter, calleeFilter, branchFilter("caller", branch), branchFilter("callee", branch));
         try (Session session = neo4jDriver.session()) {
-            Result result = session.run(cypher, Map.of("className", qualifiedClassName, "methodName", methodName));
+            Map<String, Object> params = new HashMap<>();
+            params.put("className", qualifiedClassName);
+            params.put("methodName", methodName);
+            if (isVersioned(commitId)) params.put("commitId", commitId);
+            if (hasBranch(branch)) params.put("branch", branch);
+            Result result = session.run(cypher, params);
             List<MethodEdgeDTO> callees = new ArrayList<>();
             while (result.hasNext()) {
                 Record record = result.next();
@@ -108,21 +173,29 @@ public class QueryService {
         }
     }
 
-    public CallChainDTO getCallChain(String qualifiedClassName, String methodName, List<String> paramTypes, int maxDepth) {
+    public CallChainDTO getCallChain(String qualifiedClassName, String methodName,
+                                     List<String> paramTypes, int maxDepth,
+                                     String branch, String commitId) {
         // maxDepth <= 0 means unlimited depth
         String depthSpec = maxDepth > 0 ? "1.." + maxDepth : "1..";
         // Exclude SPRING_DI edges: they represent class-level DI dependencies, not method invocations.
         // Including them would produce paths that terminate at virtual class nodes (not real methods),
         // making the result a mixed dependency graph rather than a pure directed method-call graph.
+        String nodeFilter = "(" + branchFilter("n", branch) + " AND " + versionFilter("n", commitId) + ")";
         String cypher = String.format("""
             MATCH path = (start:MethodNode)-[:CALLS*%s]->(end:MethodNode)
             WHERE start.qualifiedClassName = $className AND start.methodName = $methodName
               AND ALL(r IN relationships(path) WHERE r.callType <> 'SPRING_DI')
-              AND ALL(n IN nodes(path) WHERE coalesce(n.current, true) = true)
+              AND ALL(n IN nodes(path) WHERE %s)
             RETURN path
-            """, depthSpec);
+            """, depthSpec, nodeFilter);
         try (Session session = neo4jDriver.session()) {
-            Result result = session.run(cypher, Map.of("className", qualifiedClassName, "methodName", methodName));
+            Map<String, Object> params = new HashMap<>();
+            params.put("className", qualifiedClassName);
+            params.put("methodName", methodName);
+            if (isVersioned(commitId)) params.put("commitId", commitId);
+            if (hasBranch(branch)) params.put("branch", branch);
+            Result result = session.run(cypher, params);
 
             MethodNodeDTO root = null;
             Map<String, List<CallChainNodeDTO>> childrenMap = new LinkedHashMap<>();
@@ -183,20 +256,28 @@ public class QueryService {
      * Returns both upstream callers and downstream callees for a method, up to the given depth.
      * Each level of depth traverses one CALLS relationship.
      */
-    public CallTraceDTO traceMethod(String qualifiedClassName, String methodName, List<String> paramTypes, int depth) {
+    public CallTraceDTO traceMethod(String qualifiedClassName, String methodName,
+                                    List<String> paramTypes, int depth,
+                                    String branch, String commitId) {
         int effectiveDepth = depth <= 0 ? 5 : depth;
+        String nodeFilter = "(" + branchFilter("n", branch) + " AND " + versionFilter("n", commitId) + ")";
 
         // Upstream: callers that call this method (reverse direction)
         List<MethodEdgeDTO> upstream = new ArrayList<>();
         String upstreamCypher = String.format("""
             MATCH path = (caller:MethodNode)-[c:CALLS*1..%d]->(callee:MethodNode)
             WHERE callee.qualifiedClassName = $className AND callee.methodName = $methodName
-              AND ALL(n IN nodes(path) WHERE coalesce(n.current, true) = true)
+              AND ALL(n IN nodes(path) WHERE %s)
               AND ALL(r IN relationships(path) WHERE r.callType <> 'SPRING_DI')
             RETURN caller, last(c).callType AS callType, last(c).lineNumber AS lineNumber
-            """, effectiveDepth);
+            """, effectiveDepth, nodeFilter);
         try (Session session = neo4jDriver.session()) {
-            Result result = session.run(upstreamCypher, Map.of("className", qualifiedClassName, "methodName", methodName));
+            Map<String, Object> params = new HashMap<>();
+            params.put("className", qualifiedClassName);
+            params.put("methodName", methodName);
+            if (isVersioned(commitId)) params.put("commitId", commitId);
+            if (hasBranch(branch)) params.put("branch", branch);
+            Result result = session.run(upstreamCypher, params);
             while (result.hasNext()) {
                 Record record = result.next();
                 Node callerNode = record.get("caller").asNode();
@@ -214,12 +295,17 @@ public class QueryService {
         String downstreamCypher = String.format("""
             MATCH path = (caller:MethodNode)-[c:CALLS*1..%d]->(callee:MethodNode)
             WHERE caller.qualifiedClassName = $className AND caller.methodName = $methodName
-              AND ALL(n IN nodes(path) WHERE coalesce(n.current, true) = true)
+              AND ALL(n IN nodes(path) WHERE %s)
               AND ALL(r IN relationships(path) WHERE r.callType <> 'SPRING_DI')
             RETURN callee, last(c).callType AS callType, last(c).lineNumber AS lineNumber
-            """, effectiveDepth);
+            """, effectiveDepth, nodeFilter);
         try (Session session = neo4jDriver.session()) {
-            Result result = session.run(downstreamCypher, Map.of("className", qualifiedClassName, "methodName", methodName));
+            Map<String, Object> params = new HashMap<>();
+            params.put("className", qualifiedClassName);
+            params.put("methodName", methodName);
+            if (isVersioned(commitId)) params.put("commitId", commitId);
+            if (hasBranch(branch)) params.put("branch", branch);
+            Result result = session.run(downstreamCypher, params);
             while (result.hasNext()) {
                 Record record = result.next();
                 Node calleeNode = record.get("callee").asNode();
@@ -289,8 +375,22 @@ public class QueryService {
     // ==================== MySQL Metadata Query Methods ====================
 
     public ClassDetailDTO getClassDetail(String qualifiedClassName) {
-        ClassInfo classInfo = classInfoRepository.findByQualifiedName(qualifiedClassName)
-            .orElseThrow(() -> new ResourceNotFoundException("Class not found: " + qualifiedClassName));
+        return getClassDetail(qualifiedClassName, null);
+    }
+
+    /**
+     * 类详情：commitId 为空取 HEAD 版本，非空精确匹配该 commit 的版本行。
+     */
+    public ClassDetailDTO getClassDetail(String qualifiedClassName, String commitId) {
+        // 版本化后同名行会随分析累积，按 commitId 精确取；未指定时取 HEAD 的最新一行
+        List<ClassInfo> matched = (commitId != null && !commitId.isBlank())
+                ? classInfoRepository.findByQualifiedNameAndCommitId(qualifiedClassName, commitId)
+                : classInfoRepository.findByQualifiedNameAndIsHeadTrue(qualifiedClassName);
+        ClassInfo classInfo = matched.isEmpty() ? null : matched.get(matched.size() - 1);
+        if (classInfo == null) {
+            throw new ResourceNotFoundException("Class not found: " + qualifiedClassName
+                    + (commitId != null && !commitId.isBlank() ? " at commit " + commitId : ""));
+        }
 
         List<MethodInfo> methods = methodInfoRepository.findByClassInfoId(classInfo.getId());
         List<FieldInfo> fields = fieldInfoRepository.findByClassId(classInfo.getId());
@@ -342,7 +442,7 @@ public class QueryService {
     }
 
     public List<ClassSummaryDTO> listClassesByPackage(String packageName) {
-        List<ClassInfo> classes = classInfoRepository.findByQualifiedNameStartingWith(packageName);
+        List<ClassInfo> classes = classInfoRepository.findByQualifiedNameStartingWithAndIsHeadTrue(packageName);
         return classes.stream()
             .map(c -> new ClassSummaryDTO(
                 c.getId(),
@@ -357,7 +457,10 @@ public class QueryService {
         List<InheritanceRelation> relations =
             inheritanceRelationRepository.findByParentQualifiedNameAndRelationType(interfaceName, "IMPLEMENTS");
         return relations.stream()
-            .map(r -> classInfoRepository.findByQualifiedName(r.getChildQualifiedName()).orElse(null))
+            .map(r -> {
+                List<ClassInfo> headClasses = classInfoRepository.findByQualifiedNameAndIsHeadTrue(r.getChildQualifiedName());
+                return headClasses.isEmpty() ? null : headClasses.get(headClasses.size() - 1);
+            })
             .filter(java.util.Objects::nonNull)
             .map(c -> new ClassSummaryDTO(
                 c.getId(),
@@ -369,7 +472,7 @@ public class QueryService {
     }
 
     public List<AnnotatedElementDTO> findByAnnotation(String annotationName) {
-        List<AnnotationInfo> annotations = annotationInfoRepository.findByAnnotationName(annotationName);
+        List<AnnotationInfo> annotations = annotationInfoRepository.findByAnnotationNameAndIsHeadTrue(annotationName);
         List<AnnotatedElementDTO> result = new ArrayList<>();
 
         for (AnnotationInfo annotation : annotations) {
@@ -411,8 +514,8 @@ public class QueryService {
         }
     }
 
-    public List<EndpointDTO> getEndpoints(Long projectId) {
-        return getEntryPoints(projectId, ENTRY_TYPE_HTTP_API).stream()
+    public List<EndpointDTO> getEndpoints(Long projectId, String branch, String commitId) {
+        return getEntryPoints(projectId, ENTRY_TYPE_HTTP_API, branch, commitId).stream()
                 .map(entry -> new EndpointDTO(
                         entry.httpMethod(),
                         entry.path(),
@@ -427,9 +530,9 @@ public class QueryService {
                 .toList();
     }
 
-    public List<EntryPointDTO> getEntryPoints(Long projectId, String type) {
+    public List<EntryPointDTO> getEntryPoints(Long projectId, String type, String branch, String commitId) {
         String normalizedType = normalizeEntryPointType(type);
-        EntryPointContext context = buildEntryPointContext(projectId);
+        EntryPointContext context = buildEntryPointContext(projectId, branch, commitId);
         Map<String, EntryPointDTO> result = new LinkedHashMap<>();
 
         if (normalizedType == null || ENTRY_TYPE_HTTP_API.equals(normalizedType)) {
@@ -442,6 +545,10 @@ public class QueryService {
             addAnnotatedEntryPoints(context, List.of("Scheduled"), ENTRY_TYPE_SCHEDULED, result);
         }
         if (ENTRY_TYPE_ROOT_METHOD.equals(normalizedType)) {
+            addRootMethodEntryPoints(projectId, result);
+        } else if (normalizedType == null && result.isEmpty()) {
+            // 注解型入口为空（Go 等无注解语言的项目）时回退到根方法，
+            // 让"按项目浏览入口"对非注解语言也可用；Java 项目保持 API 优先不变
             addRootMethodEntryPoints(projectId, result);
         }
 
@@ -471,6 +578,81 @@ public class QueryService {
                 .toList();
     }
 
+    /**
+     * 列出某项目（已分析）关联的 Git 仓库的所有分支。
+     * 通过 projectId → AnalyzedProjectEntity.repoConfigId → RepoConfig → JGit 解析。
+     * 本地分析项目（repoConfigId 为 null）返回空列表。
+     * <p>
+     * 结果缓存 5 分钟：该查询每次都会触发远端 fetchAll（网络开销大），
+     * 而分支列表变化频率低，前端下拉会高频重复请求。
+     */
+    public List<BranchInfo> listBranches(Long projectId) {
+        AnalyzedProjectEntity project = javaProjectRepository.findById(projectId)
+                .orElseThrow(() -> new ResourceNotFoundException("项目不存在: " + projectId));
+        if (project.getRepoConfigId() == null) {
+            return List.of();
+        }
+        CachedGitList<List<BranchInfo>> cached = branchCache.get(projectId);
+        if (cached != null && cached.expiresAt() > System.currentTimeMillis()) {
+            return cached.value();
+        }
+        RepoConfig repoConfig = repoConfigService.getById(project.getRepoConfigId());
+        List<BranchInfo> branches = gitService.listBranches(repoConfig);
+        branchCache.put(projectId, new CachedGitList<>(branches, System.currentTimeMillis() + GIT_LIST_CACHE_TTL_MILLIS));
+        return branches;
+    }
+
+    /**
+     * 列出某项目某分支最近的 commit 历史（结果缓存 5 分钟，理由同 {@link #listBranches}）。
+     */
+    public List<CommitInfo> listCommits(Long projectId, String branch, int limit) {
+        AnalyzedProjectEntity project = javaProjectRepository.findById(projectId)
+                .orElseThrow(() -> new ResourceNotFoundException("项目不存在: " + projectId));
+        if (project.getRepoConfigId() == null) {
+            return List.of();
+        }
+        String cacheKey = projectId + ":" + branch;
+        CachedGitList<List<CommitInfo>> cached = commitCache.get(cacheKey);
+        if (cached != null && cached.expiresAt() > System.currentTimeMillis()) {
+            return cached.value();
+        }
+        RepoConfig repoConfig = repoConfigService.getById(project.getRepoConfigId());
+        List<CommitInfo> commits = gitService.listCommits(repoConfig, branch, limit);
+        commitCache.put(cacheKey, new CachedGitList<>(commits, System.currentTimeMillis() + GIT_LIST_CACHE_TTL_MILLIS));
+        return commits;
+    }
+
+    // -------------------------------------------------------------------------
+    // Metadata-driven version enumeration
+    // -------------------------------------------------------------------------
+
+    /**
+     * 从元数据枚举项目已分析过的分支（按最近分析排序）。
+     * <p>
+     * 本地项目（repoConfigId 为 null）没有 Git 服务可询，版本选择的唯一事实来源
+     * 是已落库的 class_info.branch；同一本地仓库多分支分析后数据按 branch 列共存
+     * 于同一个 project。对 repo 驱动项目同样可用（列出历史分析过的分支）。
+     */
+    public List<BranchInfo> getAnalyzedBranches(Long projectId) {
+        javaProjectRepository.findById(projectId)
+                .orElseThrow(() -> new ResourceNotFoundException("项目不存在: " + projectId));
+        return classInfoRepository.findAnalyzedBranches(projectId).stream()
+                .map(branch -> {
+                    List<String> heads = classInfoRepository.findHeadCommitIds(projectId, branch);
+                    return new BranchInfo(branch, heads.isEmpty() ? null : heads.get(0));
+                })
+                .toList();
+    }
+
+    /** 从元数据枚举指定分支已分析过的 commit（按最近分析排序）。 */
+    public List<CommitInfo> getAnalyzedCommits(Long projectId, String branch) {
+        javaProjectRepository.findById(projectId)
+                .orElseThrow(() -> new ResourceNotFoundException("项目不存在: " + projectId));
+        return classInfoRepository.findAnalyzedCommitIds(projectId, branch).stream()
+                .map(commitId -> new CommitInfo(commitId, "已分析版本", "", 0L))
+                .toList();
+    }
+
     // ==================== Analysis Report / Verification ====================
 
     /**
@@ -492,7 +674,7 @@ public class QueryService {
         GraphStats graphStats = buildGraphStats();
 
         // ── 2. Metadata statistics from MySQL ───────────────────────────────
-        List<JavaProjectEntity> projects = projectNameFilter != null && !projectNameFilter.isBlank()
+        List<AnalyzedProjectEntity> projects = projectNameFilter != null && !projectNameFilter.isBlank()
                 ? javaProjectRepository.findAll().stream()
                     .filter(p -> p.getProjectName() != null
                             && p.getProjectName().toLowerCase().contains(projectNameFilter.toLowerCase()))
@@ -557,7 +739,7 @@ public class QueryService {
         }
     }
 
-    private List<MetadataStats> buildMetadataStats(List<JavaProjectEntity> projects) {
+    private List<MetadataStats> buildMetadataStats(List<AnalyzedProjectEntity> projects) {
         return projects.stream().map(p -> {
             // Use filtered queries instead of findAll() + in-memory stream filter
             List<ClassInfo> projectClasses = p.getBranch() != null
@@ -572,10 +754,8 @@ public class QueryService {
             long methodCount = 0;
             long fieldCount = 0;
             if (!classIds.isEmpty()) {
-                for (Long cid : classIds) {
-                    methodCount += methodInfoRepository.findByClassInfoId(cid).size();
-                    fieldCount += fieldInfoRepository.findByClassId(cid).size();
-                }
+                methodCount = methodInfoRepository.findByClassInfoIdIn(classIds).size();
+                fieldCount = fieldInfoRepository.findByClassIdIn(classIds).size();
             }
             return new MetadataStats(p.getId(), p.getProjectName(), p.getBranch(),
                     p.getAnalyzedTag(), classCount, methodCount, fieldCount);
@@ -596,7 +776,7 @@ public class QueryService {
                     "MATCH (n:MethodNode) WHERE coalesce(n.current, true) = true RETURN DISTINCT n.qualifiedClassName AS c")
                     .list(r -> r.get("c").asString()));
         }
-        mysqlClasses = classInfoRepository.findAll().stream()
+        mysqlClasses = classInfoRepository.findByIsHeadTrue().stream()
                 .map(ClassInfo::getQualifiedName)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
@@ -625,7 +805,7 @@ public class QueryService {
     }
 
     private IssueList detectIssues(GraphStats graphStats, List<MetadataStats> metadataStatsList,
-                                   CrossValidation crossValidation, List<JavaProjectEntity> projects) {
+                                   CrossValidation crossValidation, List<AnalyzedProjectEntity> projects) {
         List<String> items = new ArrayList<>();
 
         // No projects analysed at all
@@ -768,10 +948,30 @@ public class QueryService {
         };
     }
 
-    private EntryPointContext buildEntryPointContext(Long projectId) {
-        List<ClassInfo> classes = projectId != null
-                ? classInfoRepository.findByProjectId(projectId)
-                : classInfoRepository.findAll();
+    private EntryPointContext buildEntryPointContext(Long projectId, String branch, String commitId) {
+        // 版本过滤（对应 BR-DIFF-011）：
+        //   commitId 非空 → 精确匹配该 commit 的版本数据
+        //   commitId 为空 → 取 is_head=true 的 HEAD 版本
+        boolean versioned = commitId != null && !commitId.isBlank();
+        boolean hasBranch = branch != null && !branch.isBlank();
+        List<ClassInfo> classes;
+        if (projectId != null) {
+            if (versioned && hasBranch) {
+                classes = classInfoRepository.findByProjectIdAndBranchAndCommitId(projectId, branch, commitId);
+            } else if (versioned) {
+                classes = classInfoRepository.findByProjectIdAndCommitId(projectId, commitId);
+            } else if (hasBranch) {
+                classes = classInfoRepository.findByProjectIdAndBranchAndIsHeadTrue(projectId, branch);
+            } else {
+                classes = classInfoRepository.findByProjectIdAndIsHeadTrue(projectId);
+            }
+        } else {
+            // 无 projectId 的全表入口查询：版本化保留后全表行数持续增长，
+            // 必须在 SQL 层过滤而不是 findAll 载入内存再筛
+            classes = versioned
+                    ? classInfoRepository.findByCommitId(commitId)
+                    : classInfoRepository.findByIsHeadTrue();
+        }
         if (classes.isEmpty()) {
             return new EntryPointContext(Map.of(), Map.of(), Map.of(), Map.of(), List.of());
         }
@@ -792,17 +992,17 @@ public class QueryService {
                             annotation.getTargetId(), parseAnnotationPath(annotation.getAnnotationParams())));
         }
 
-        Map<Long, JavaProjectEntity> projectByClassId = new HashMap<>();
+        Map<Long, AnalyzedProjectEntity> projectByClassId = new HashMap<>();
         Set<Long> projectIds = classes.stream()
                 .map(ClassInfo::getProjectId)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
         if (!projectIds.isEmpty()) {
-            Map<Long, JavaProjectEntity> projectById = new HashMap<>();
+            Map<Long, AnalyzedProjectEntity> projectById = new HashMap<>();
             javaProjectRepository.findAllById(projectIds).forEach(project -> projectById.put(project.getId(), project));
             classes.forEach(classInfo -> {
                 if (classInfo.getProjectId() != null) {
-                    JavaProjectEntity project = projectById.get(classInfo.getProjectId());
+                    AnalyzedProjectEntity project = projectById.get(classInfo.getProjectId());
                     if (project != null) {
                         projectByClassId.put(classInfo.getId(), project);
                     }
@@ -821,6 +1021,13 @@ public class QueryService {
             }
             ClassInfo classInfo = methodInfo.getClassInfo();
             String httpMethod = parseRequestMappingMethod(annotation);
+            if (httpMethod == null && "HttpRoute".equals(annotation.getAnnotationName())) {
+                // Go 合成注解：params = {"path":"/api/x","method":"GET"}
+                httpMethod = parseStringParam(annotation.getAnnotationParams(), "method");
+                if (httpMethod == null || httpMethod.isBlank()) {
+                    httpMethod = "*";
+                }
+            }
             if (httpMethod == null) {
                 httpMethod = annotation.getAnnotationName().replace("Mapping", "").toUpperCase(Locale.ROOT);
                 if ("REQUEST".equals(httpMethod)) {
@@ -932,7 +1139,7 @@ public class QueryService {
 
     private EntryPointDTO buildEntryPoint(String entryType, String displayName, String triggerLabel,
                                           String httpMethod, String path, MethodInfo methodInfo,
-                                          ClassInfo classInfo, JavaProjectEntity project) {
+                                          ClassInfo classInfo, AnalyzedProjectEntity project) {
         String ownerSimpleName = classInfo.getSimpleName() != null
                 ? classInfo.getSimpleName()
                 : extractSimpleName(classInfo.getQualifiedName());
@@ -1054,10 +1261,16 @@ public class QueryService {
     }
 
     private String parseAnnotationPath(String params) {
+        return parseStringParam(params, null);
+    }
+
+    /** Parses a string param from the stored annotation params JSON; keys is a
+     *  set of alternative keys ("value"/"path" for paths), or a single key. */
+    private String parseStringParam(String params, String key) {
         if (params == null || params.equals("{}")) return "";
-        // stored as {"value":"\"check\""} — strip escaped quotes
+        String keyPattern = key != null ? java.util.regex.Pattern.quote(key) : "(?:value|path)";
         java.util.regex.Matcher m = java.util.regex.Pattern
-            .compile("\"(?:value|path)\":\\s*\"\\\\?\"?([^\"\\\\]+)")
+            .compile("\"" + keyPattern + "\":\\s*\"\\\\?\"?([^\"\\\\]+)")
             .matcher(params);
         return m.find() ? m.group(1) : "";
     }
@@ -1074,7 +1287,7 @@ public class QueryService {
     private record EntryPointContext(
             Map<Long, ClassInfo> classById,
             Map<Long, MethodInfo> methodById,
-            Map<Long, JavaProjectEntity> projectByClassId,
+            Map<Long, AnalyzedProjectEntity> projectByClassId,
             Map<Long, String> classPrefixById,
             List<Long> methodIds
     ) {}
