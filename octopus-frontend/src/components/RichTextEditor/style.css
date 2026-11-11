@@ -1,0 +1,18 @@
+.rich-editor { border: 1px solid #d8e1ed; border-radius: 10px; overflow: hidden; background: #fff; }
+.rich-editor:focus-within { border-color: #1677ff; box-shadow: 0 0 0 2px #1677ff12; }
+.rich-editor-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid #edf1f6; background: #f8fafc; flex-wrap: wrap; }
+.rich-editor .tiptap { padding: 20px 24px; min-height: 200px; max-height: 520px; overflow: auto; outline: none; color: #233348; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.rich-editor .tiptap > :first-child { margin-top: 0; }
+.rich-editor .tiptap h1 { font-size: 25px; }
+.rich-editor .tiptap h2 { font-size: 20px; }
+.rich-editor .tiptap h3 { font-size: 17px; }
+.rich-editor .tiptap p { margin: 8px 0; }
+.rich-editor .tiptap ul, .rich-editor .tiptap ol { padding-left: 24px; }
+.rich-editor .tiptap blockquote { border-left: 3px solid #91baff; padding-left: 16px; margin-left: 0; color: #64748b; }
+.rich-editor .tiptap pre { white-space: pre-wrap; background: #f1f5f9; padding: 14px; border-radius: 6px; font-family: monospace; }
+.rich-editor .tiptap code { background: #f1f5f9; padding: 2px 4px; border-radius: 3px; }
+.rich-editor .tiptap table { border-collapse: collapse; width: 100%; }
+.rich-editor .tiptap td, .rich-editor .tiptap th { border: 1px solid #d8e1ed; padding: 6px 10px; min-width: 60px; }
+.rich-editor .tiptap th { background: #f8fafc; }
+.rich-editor-readonly .tiptap { min-height: 100px; }
+.rich-editor textarea { border: 0; border-radius: 0; padding: 18px; font-family: ui-monospace, monospace; }

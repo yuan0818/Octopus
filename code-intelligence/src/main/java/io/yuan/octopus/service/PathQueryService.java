@@ -9,6 +9,7 @@ import io.yuan.octopus.dto.response.EntryChainDiffDTO.ChangedMethod;
 import io.yuan.octopus.dto.response.EntryChainDiffDTO.MethodRef;
 import io.yuan.octopus.dto.response.ImpactPathsDTO;
 import io.yuan.octopus.dto.response.MethodNodeDTO;
+import io.yuan.octopus.common.SignatureNormalizer;
 import io.yuan.octopus.dto.response.SourcePathDTO;
 import io.yuan.octopus.exception.ResourceNotFoundException;
 import io.yuan.octopus.exception.ValidationException;
@@ -91,13 +92,20 @@ public class PathQueryService {
                     "Entry not found in either version: " + className + "#" + methodName);
         }
 
-        List<MethodRef> added = to.members().keySet().stream()
-                .filter(sig -> !from.members().containsKey(sig))
-                .map(sig -> to.members().get(sig).toRef())
+        // 签名身份键规范化：PSI(", ") 与 JavaParser(",") 的分隔符差异不能
+        // 把同一方法拆成 added+removed（曾导致入口本身被错判为"一增一删"）
+        java.util.Set<String> fromKeys = new java.util.HashSet<>();
+        from.members().keySet().forEach(sig -> fromKeys.add(SignatureNormalizer.key(sig)));
+        java.util.Set<String> toKeys = new java.util.HashSet<>();
+        to.members().keySet().forEach(sig -> toKeys.add(SignatureNormalizer.key(sig)));
+
+        List<MethodRef> added = to.members().values().stream()
+                .filter(m -> !fromKeys.contains(SignatureNormalizer.key(m.signature())))
+                .map(ChainMember::toRef)
                 .toList();
-        List<MethodRef> removed = from.members().keySet().stream()
-                .filter(sig -> !to.members().containsKey(sig))
-                .map(sig -> from.members().get(sig).toRef())
+        List<MethodRef> removed = from.members().values().stream()
+                .filter(m -> !toKeys.contains(SignatureNormalizer.key(m.signature())))
+                .map(ChainMember::toRef)
                 .toList();
 
         // 共同成员：git 文本优先，快照回退
@@ -107,17 +115,19 @@ public class PathQueryService {
 
         List<ChangedMethod> changed = new ArrayList<>();
         int unchanged = 0;
-        for (Map.Entry<String, ChainMember> entry : to.members().entrySet()) {
-            ChainMember fromMember = from.members().get(entry.getKey());
+        Map<String, ChainMember> fromByCanonical = new LinkedHashMap<>();
+        from.members().values().forEach(m -> fromByCanonical.putIfAbsent(SignatureNormalizer.key(m.signature()), m));
+        for (ChainMember toMember : to.members().values()) {
+            ChainMember fromMember = fromByCanonical.get(SignatureNormalizer.key(toMember.signature()));
             if (fromMember == null) {
                 continue;
             }
-            String fromText = firstNonNull(fromGit.get(entry.getKey()), fromMember.sourceCode());
-            String toText = firstNonNull(toGit.get(entry.getKey()), entry.getValue().sourceCode());
+            String fromText = firstNonNull(fromGit.get(fromMember.signature()), fromMember.sourceCode());
+            String toText = firstNonNull(toGit.get(toMember.signature()), toMember.sourceCode());
             if (java.util.Objects.equals(fromText, toText)) {
                 unchanged++;
             } else {
-                changed.add(new ChangedMethod(entry.getValue().toRef(), fromText, toText));
+                changed.add(new ChangedMethod(toMember.toRef(), fromText, toText));
             }
         }
 
@@ -131,15 +141,37 @@ public class PathQueryService {
                 gitBacked);
     }
 
+    /**
+     * 枚举入口在指定版本的整条下游链路成员及其源码（git 优先，快照回退）。
+     * 供变更总结消费：两个版本各调一次，把完整链路源码交给 LLM 自行对比。
+     */
+    public List<Map<String, Object>> getEntryChainSource(Long projectId, String className, String methodName,
+                                                         String branch, String commitId, Integer maxDepth) {
+        int depthLimit = normalizeMaxDepth(maxDepth);
+        ChainMembers members = collectChainMembers(projectId, className, methodName, branch, commitId, depthLimit);
+        Map<String, String> git = gitTexts(projectId, branch, commitId, members);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (ChainMember m : members.members().values()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("signature", SignatureNormalizer.canonical(m.signature()));
+            row.put("qualifiedClassName", m.qualifiedClassName());
+            row.put("methodName", m.methodName());
+            row.put("source", firstNonNull(git.get(m.signature()), m.sourceCode()));
+            out.add(row);
+        }
+        return out;
+    }
+
     /** 从 method_info 坐标批量取 git 文本；无坐标/不可达的条目缺省为 null。 */
     private Map<String, String> gitTexts(Long projectId, String branch, String commitId, ChainMembers members) {
         Map<String, String> out = new LinkedHashMap<>();
+        // canonical 键 → 原始签名（成员签名可能是任一引擎格式）
         List<String> signatures = new ArrayList<>();
         List<GitMethodSourceClient.SourceItem> items = new ArrayList<>();
         List<String> commitIds = new ArrayList<>();
         for (ChainMember member : members.members().values()) {
             MethodCoordinate coord = findCoordinate(projectId, branch, commitId,
-                    member.qualifiedClassName(), member.signature());
+                    member.qualifiedClassName(), SignatureNormalizer.canonical(member.signature()));
             if (coord == null) {
                 continue;
             }
@@ -193,7 +225,12 @@ public class PathQueryService {
         if (match == null) {
             return null;
         }
+        // 精确匹配失败 → 规范化匹配（method_info 可能存的是另一引擎的分隔符格式）
         return methodInfoRepository.findByClassInfoIdAndMethodSignature(match.getId(), signature)
+                .map(java.util.Optional::of)
+                .orElseGet(() -> methodInfoRepository.findByClassInfoId(match.getId()).stream()
+                        .filter(m -> SignatureNormalizer.key(m.getMethodSignature()).equals(signature))
+                        .findFirst())
                 .filter(m -> m.getLineStart() != null && m.getLineStart() > 0
                         && m.getFilePath() != null && !m.getFilePath().isBlank())
                 .map(m -> new MethodCoordinate(m.getFilePath(), m.getLineStart(),
@@ -215,12 +252,19 @@ public class PathQueryService {
     private record ChainMembers(Map<String, ChainMember> members, MethodRef anchor, boolean truncated) {}
 
     /**
-     * 收集入口在指定版本的下游可达成员（含入口自身），版本过滤逐节点应用
-     * （与 getCallChain 一致：commitId 为空取 current=true 的 HEAD 快照）。
+     * 收集入口在指定版本的下游可达成员（含入口自身）。
+     * <p>
+     * 起始节点按 projectId 锚定；路径节点按 branch+commit 匹配、不限定 projectId——
+     * 方法节点按模块分项目存储，跨模块链路（如 device-management 调用
+     * component-common 工具方法的第二跳）的边挂在调用方模块的项目号下，
+     * 逐节点强制 projectId 会把链路掐断在模块边界。同一 commit 内跨项目
+     * 遍历合法；成员按签名去重，天然覆盖多项目重复节点。
      */
     private ChainMembers collectChainMembers(Long projectId, String className, String methodName,
                                              String branch, String commitId, int depthLimit) {
-        String versionFilter = nodeVersionFilter("n");
+        String pathFilter = "($branch = '' OR n.branch = $branch)" + """
+                AND (($commitId = '' AND coalesce(n.current, true) = true)
+                     OR ($commitId <> '' AND n.commitId = $commitId))""";
         String cypher = """
                 MATCH (start:MethodNode)
                 WHERE start.qualifiedClassName = $className
@@ -231,7 +275,7 @@ public class PathQueryService {
                 WHERE ALL(n IN nodes(path) WHERE %s)
                   AND ALL(r IN relationships(path) WHERE coalesce(r.callType, 'DIRECT') <> 'SPRING_DI')
                 RETURN DISTINCT m
-                """.formatted(nodeVersionFilter("start"), depthLimit, versionFilter);
+                """.formatted(nodeVersionFilter("start"), depthLimit, pathFilter);
 
         Map<String, Object> params = scopeParameters(branch, commitId);
         params.put("projectId", projectId != null ? projectId : -1L);
@@ -272,11 +316,7 @@ public class PathQueryService {
 
     /** 逐节点版本过滤谓词（与 getCallChain 的 branch/version 语义一致）。 */
     private static String nodeVersionFilter(String var) {
-        return """
-                ($projectId = -1 OR %s.projectId = $projectId)
-                AND ($branch = '' OR %s.branch = $branch)
-                AND (($commitId = '' AND coalesce(%s.current, true) = true)
-                     OR ($commitId <> '' AND %s.commitId = $commitId))""".formatted(var, var, var, var);
+        return CypherVersionFilters.parameterized(var);
     }
 
     public ImpactPathsDTO getImpactPaths(String signature, Long projectId, String branch,

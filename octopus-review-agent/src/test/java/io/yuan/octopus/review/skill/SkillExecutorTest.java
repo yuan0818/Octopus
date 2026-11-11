@@ -48,7 +48,7 @@ class SkillExecutorTest {
     @BeforeEach
     void setUp() {
         executor = new SkillExecutor(promptBuilder, llmIntegration, resultParser,
-                schemaValidator, skillValidator, modelRegistry);
+                schemaValidator, skillValidator);
 
         skill = new Skill("test-skill", "Test Skill", "test",
                 "prompt-1", "openai", "requirement-check", 128000, true);

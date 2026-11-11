@@ -18,6 +18,7 @@ public class SkillRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(SkillRegistry.class);
 
+    private static final com.google.gson.Gson GSON = new com.google.gson.Gson();
     private final AgentSkillRepository repository;
     private final Map<String, Skill> cache = new LinkedHashMap<>();
 
@@ -48,6 +49,8 @@ public class SkillRegistry {
         entity.setOutputParser(skill.getOutputParser());
         entity.setMaxTokens(skill.getMaxTokens());
         entity.setEnabled(skill.isEnabled());
+        entity.setInstructions(skill.getInstructions());
+        entity.setReferencesJson(GSON.toJson(skill.getReferences()));
         repository.save(entity);
         cache.put(skill.getId(), skill);
         log.debug("Registered skill: {} ({})", skill.getId(), skill.getName());
@@ -90,7 +93,7 @@ public class SkillRegistry {
                 // Re-register with toggled enabled state
                 cache.put(id, new Skill(id, skill.getName(), skill.getDescription(),
                         skill.getPromptTemplateId(), skill.getPreferredProvider(),
-                        skill.getOutputParser(), skill.getMaxTokens(), entity.isEnabled()));
+                        skill.getOutputParser(), skill.getMaxTokens(), entity.isEnabled(), skill.getInstructions(), skill.getReferences()));
             }
             log.info("Toggled skill {}: enabled={}", id, entity.isEnabled());
         });
@@ -99,6 +102,8 @@ public class SkillRegistry {
     private Skill toSkill(AgentSkill entity) {
         return new Skill(entity.getId(), entity.getName(), entity.getDescription(),
                 entity.getPromptTemplateId(), entity.getPreferredProvider(),
-                entity.getOutputParser(), entity.getMaxTokens(), entity.isEnabled());
+                entity.getOutputParser(), entity.getMaxTokens(), entity.isEnabled(), entity.getInstructions(),
+                entity.getReferencesJson() == null || entity.getReferencesJson().isBlank() ? List.of()
+                        : GSON.fromJson(entity.getReferencesJson(), new com.google.gson.reflect.TypeToken<List<SkillPackage.SkillReference>>() {}.getType()));
     }
 }

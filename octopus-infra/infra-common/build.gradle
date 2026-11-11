@@ -19,4 +19,7 @@ dependencies {
     // Minimal Spring Boot starter for @Component, @Value etc.
     api 'org.springframework.boot:spring-boot-starter:3.4.0'
     api 'com.google.code.gson:gson'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.11.4'
 }

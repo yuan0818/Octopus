@@ -1,5 +1,6 @@
 package io.yuan.octopus.review.controller.admin;
 
+import io.yuan.octopus.infra.common.CredentialEncryptor;
 import io.yuan.octopus.infra.common.Result;
 import io.yuan.octopus.review.model.ModelRegistry;
 import io.yuan.octopus.review.prompt.PromptManager;
@@ -26,11 +27,10 @@ public class ConfigAdminController {
 
     @GetMapping("/api-keys")
     public Result<Map<String, String>> getApiKeys() {
-        // Return masked keys (show only first 8 chars)
+        // 统一脱敏规则（与模型管理页一致）：最多暴露前 4 个字符
         Map<String, String> masked = new java.util.LinkedHashMap<>();
-        modelRegistry.getAllApiKeys().forEach((provider, key) -> {
-            masked.put(provider, key.length() > 8 ? key.substring(0, 8) + "..." : "***");
-        });
+        modelRegistry.getAllApiKeys().forEach((provider, key) ->
+                masked.put(provider, CredentialEncryptor.mask(key)));
         return Result.success(masked);
     }
 

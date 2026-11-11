@@ -1,75 +1,61 @@
 package io.yuan.octopus.review.service;
 
+import io.yuan.octopus.infra.common.CredentialEncryptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import javax.crypto.Cipher;
-import javax.crypto.spec.GCMParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
-import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
-import java.util.Base64;
-
 /**
- * API Key 等敏感信息的静态加密（AES-256-GCM）。
+ * 模型 API Key 等敏感信息的静态加密，委托给全平台统一的 {@link CredentialEncryptor}
+ * （与 code-intelligence、code-base、scenario-runner 同一实现、同一密钥、同一格式）。
  * <p>
- * 密文格式 {@code enc:v1:<base64(iv)>:<base64(ciphertext+tag)>}；
- * 无前缀的值视为历史明文，读取时原样返回（首次保存时自动升级为密文）。
- * 密钥来自 {@code review.security.secret-key}（默认取环境变量 OCTOPUS_ENCRYPTION_KEY，
- * 与 code-intelligence 的 CredentialEncryptor 约定一致）。密钥未配置时降级为明文存储并告警。
+ * 策略（fail closed）：
+ * <ul>
+ *   <li>密钥未配置：服务可以启动，已有明文历史值仍可读取，但<b>任何写入密钥的操作都会报错</b>，
+ *       不再静默以明文落库。</li>
+ *   <li>密钥长度不是 16/24/32 字节：启动失败（此前会用 SHA-256 隐式推导，导致与其他服务
+ *       推导出的密钥不一致、跨服务无法互解）。</li>
+ *   <li>无前缀的值视为历史明文，读取时原样返回；有密钥时由 ModelRegistry 启动时升级为密文。</li>
+ * </ul>
  */
 @Component
 public class SecretCipher {
 
     private static final Logger log = LoggerFactory.getLogger(SecretCipher.class);
-    private static final String PREFIX = "enc:v1:";
-    private static final int GCM_TAG_BITS = 128;
-    private static final int IV_BYTES = 12;
 
-    private final SecretKeySpec key;
-    private final SecureRandom random = new SecureRandom();
+    private final CredentialEncryptor encryptor;
 
     public SecretCipher(@Value("${review.security.secret-key:${OCTOPUS_ENCRYPTION_KEY:}}") String secretKey) {
         if (secretKey == null || secretKey.isBlank()) {
-            log.warn("review.security.secret-key 未配置：API Key 将以明文存储（设置 OCTOPUS_ENCRYPTION_KEY 启用加密）");
-            this.key = null;
+            log.warn("OCTOPUS_ENCRYPTION_KEY 未配置：模型 API Key 将无法保存（不会以明文落库）。"
+                    + "请设置与其他 Octopus 服务一致的 16/24/32 字节密钥");
+            this.encryptor = null;
             return;
         }
-        byte[] bytes = secretKey.getBytes(StandardCharsets.UTF_8);
-        if (bytes.length != 16 && bytes.length != 24 && bytes.length != 32) {
-            // 任意长度密钥哈希到 32 字节，避免 AES 密钥长度限制导致启动失败
-            try {
-                bytes = java.security.MessageDigest.getInstance("SHA-256")
-                        .digest(bytes);
-            } catch (Exception e) {
-                throw new IllegalStateException("无法初始化密钥派生", e);
-            }
-        }
-        this.key = new SecretKeySpec(bytes, "AES");
+        // 长度不合法时 CredentialEncryptor 抛 IllegalArgumentException → 启动失败（fail-fast）
+        this.encryptor = new CredentialEncryptor(secretKey);
+    }
+
+    /** 是否已配置加密密钥。 */
+    public boolean available() {
+        return encryptor != null;
     }
 
     public boolean isEncrypted(String value) {
-        return value != null && value.startsWith(PREFIX);
+        return CredentialEncryptor.isEncrypted(value);
     }
 
-    /** 加密；未配置密钥时原样返回明文。 */
+    /** 加密；空值与已加密值原样返回。未配置密钥时拒绝写入。 */
     public String encrypt(String plain) {
-        if (plain == null || plain.isBlank() || isEncrypted(plain) || key == null) {
+        if (plain == null || plain.isBlank() || isEncrypted(plain)) {
             return plain;
         }
-        try {
-            byte[] iv = new byte[IV_BYTES];
-            random.nextBytes(iv);
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_BITS, iv));
-            byte[] ct = cipher.doFinal(plain.getBytes(StandardCharsets.UTF_8));
-            return PREFIX + Base64.getEncoder().encodeToString(iv)
-                    + ":" + Base64.getEncoder().encodeToString(ct);
-        } catch (Exception e) {
-            throw new IllegalStateException("加密失败: " + e.getMessage(), e);
+        if (encryptor == null) {
+            throw new IllegalStateException(
+                    "尚未配置加密密钥 OCTOPUS_ENCRYPTION_KEY，无法保存模型 API Key（不会以明文存储）");
         }
+        return encryptor.encrypt(plain);
     }
 
     /** 解密；明文值（历史数据）原样返回。 */
@@ -77,28 +63,19 @@ public class SecretCipher {
         if (stored == null || !isEncrypted(stored)) {
             return stored;
         }
-        if (key == null) {
+        if (encryptor == null) {
             log.error("存在加密的 API Key 但密钥未配置，无法解密");
             return null;
         }
         try {
-            String[] parts = stored.substring(PREFIX.length()).split(":", 2);
-            byte[] iv = Base64.getDecoder().decode(parts[0]);
-            byte[] ct = Base64.getDecoder().decode(parts[1]);
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_BITS, iv));
-            return new String(cipher.doFinal(ct), StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            throw new IllegalStateException("解密失败（密钥不一致?）", e);
+            return encryptor.decrypt(stored);
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("解密失败（密钥与加密时不一致？）", e);
         }
     }
 
-    /** 展示用脱敏：只暴露是否存在与极短前缀。 */
+    /** 展示用脱敏（全平台统一规则，见 {@link CredentialEncryptor#mask}）。 */
     public String mask(String plainOrEncrypted) {
-        String plain = decrypt(plainOrEncrypted);
-        if (plain == null || plain.isEmpty()) {
-            return "";
-        }
-        return plain.length() <= 8 ? "********" : plain.substring(0, 4) + "****";
+        return CredentialEncryptor.mask(decrypt(plainOrEncrypted));
     }
 }

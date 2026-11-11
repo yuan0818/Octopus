@@ -40,8 +40,10 @@ public class ModelRegistry {
         for (AgentModel entity : all) {
             cache.put(entity.getName(), toConfig(entity));
             stats.put(entity.getName(), new AtomicInteger(0));
-            // 存量明文密钥懒迁移为密文存储
-            if (!secretCipher.isEncrypted(entity.getApiKey())) {
+            // 存量明文密钥懒迁移为密文存储（未配置密钥时跳过，避免启动失败；写入路径会 fail closed）
+            if (secretCipher.available()
+                    && entity.getApiKey() != null && !entity.getApiKey().isBlank()
+                    && !secretCipher.isEncrypted(entity.getApiKey())) {
                 entity.setApiKey(secretCipher.encrypt(entity.getApiKey()));
                 repository.save(entity);
             }
@@ -62,6 +64,7 @@ public class ModelRegistry {
         entity.setName(config.getName());
         entity.setProvider(config.getProvider());
         entity.setApiFormat(config.getApiFormat());
+        entity.setStructuredOutput(config.getStructuredOutput());
         entity.setModelId(config.getModelId());
         entity.setApiUrl(config.getApiUrl());
         entity.setApiKey(secretCipher.encrypt(config.getApiKey()));
@@ -76,8 +79,26 @@ public class ModelRegistry {
         log.debug("Registered model: {} ({})", config.getName(), config.getModelId());
     }
 
+    /** 防御性副本：外部（如管理接口脱敏）对返回对象的修改不得影响注册表缓存。 */
+    private static ModelConfig copyOf(ModelConfig c) {
+        ModelConfig copy = new ModelConfig();
+        copy.setName(c.getName());
+        copy.setProvider(c.getProvider());
+        copy.setApiFormat(c.getApiFormat());
+        copy.setStructuredOutput(c.getStructuredOutput());
+        copy.setModelId(c.getModelId());
+        copy.setApiUrl(c.getApiUrl());
+        copy.setApiKey(c.getApiKey());
+        copy.setMaxTokens(c.getMaxTokens());
+        copy.setTemperature(c.getTemperature());
+        copy.setEnabled(c.isEnabled());
+        copy.setWeight(c.getWeight());
+        return copy;
+    }
+
     public ModelConfig get(String name) {
-        return cache.get(name);
+        ModelConfig cached = cache.get(name);
+        return cached != null ? copyOf(cached) : null;
     }
 
     public ModelConfig select(String provider, String taskType) {
@@ -172,7 +193,9 @@ public class ModelRegistry {
     }
 
     public Map<String, ModelConfig> getAllConfigs() {
-        return Map.copyOf(cache);
+        Map<String, ModelConfig> out = new LinkedHashMap<>();
+        cache.forEach((k, v) -> out.put(k, copyOf(v)));
+        return out;
     }
 
     private void rebuildFallbackChains() {
@@ -190,6 +213,7 @@ public class ModelRegistry {
         config.setName(entity.getName());
         config.setProvider(entity.getProvider());
         config.setApiFormat(entity.getApiFormat());
+        config.setStructuredOutput(entity.getStructuredOutput());
         config.setModelId(entity.getModelId());
         config.setApiUrl(entity.getApiUrl());
         // 运行时使用明文（内部 cache），落库始终是密文

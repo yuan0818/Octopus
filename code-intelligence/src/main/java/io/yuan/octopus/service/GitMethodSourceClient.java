@@ -45,6 +45,19 @@ public class GitMethodSourceClient {
 
     public record SourceItem(String filePath, int lineStart, int lineEnd) {}
 
+    public List<String> tree(long projectId, String commitId) {
+        if (commitId == null || !commitId.matches("[a-fA-F0-9]{40}")) throw new IllegalArgumentException("需要完整提交编号");
+        try {
+            var request = HttpRequest.newBuilder(URI.create(baseUrl + "/api/source/tree?projectId=" + projectId + "&commitId=" + commitId)).timeout(Duration.ofSeconds(30)).GET().build();
+            var response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) throw new IllegalStateException("仓库目录服务不可用");
+            var root = com.google.gson.JsonParser.parseString(response.body()).getAsJsonObject();
+            if (!root.get("success").getAsBoolean()) throw new IllegalStateException("指定提交目录不可读取");
+            return java.util.Arrays.asList(GSON.fromJson(root.get("data"), String[].class));
+        } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalStateException("读取目录已中断"); }
+        catch (java.io.IOException e) { throw new IllegalStateException("仓库目录服务不可用"); }
+    }
+
     /**
      * @return 按 items 顺序的文本列表；git 不可达/条目未找到时对应位置为 null
      *         （调用方自行决定回退策略）

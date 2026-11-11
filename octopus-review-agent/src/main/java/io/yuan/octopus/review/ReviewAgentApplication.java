@@ -26,6 +26,7 @@ public class ReviewAgentApplication {
     }
 
     @Bean
+    @org.springframework.context.annotation.DependsOn("skillContentSchema")
     public LocalContainerEntityManagerFactoryBean entityManagerFactory(DataSource dataSource) {
         LocalContainerEntityManagerFactoryBean em = new LocalContainerEntityManagerFactoryBean();
         em.setDataSource(dataSource);

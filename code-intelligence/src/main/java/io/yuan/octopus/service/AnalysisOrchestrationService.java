@@ -18,15 +18,16 @@ import io.yuan.octopus.repository.AnalyzedProjectRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PreDestroy;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.stream.Collectors;
 
 @Service
@@ -47,12 +48,17 @@ public class AnalysisOrchestrationService {
     private final LocalGitDetector localGitDetector;
     private final BackendProjectFlagService backendProjectFlagService;
     private final AnalysisDispatcher analysisDispatcher;
+    private final LocalPathPolicy localPathPolicy;
 
     /**
-     * Single-thread executor for background analysis pipeline.
-     * Using virtual threads (Java 21) to keep per-task cost low.
+     * Background executor for analysis pipelines (virtual threads keep per-task cost low).
+     * <p>
+     * 并发由 {@link #analysisPermits} 限制：PSI 服务单实例单飞，无上限提交只会让任务在 PSI 端
+     * 排队直到超时，并同时占用 Git 检出、解析、Neo4j 写入资源。超出上限的任务在虚拟线程上
+     * 等待许可（阻塞成本极低），按提交顺序公平执行。
      */
     private final ExecutorService analysisExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    private final Semaphore analysisPermits;
 
     public AnalysisOrchestrationService(RepoConfigService repoConfigService,
                                         GitService gitService,
@@ -66,7 +72,9 @@ public class AnalysisOrchestrationService {
                                         BackendProjectFlagService backendProjectFlagService,
                                         PSIExecutor psiExecutor,
                                         LocalGitDetector localGitDetector,
-                                        AnalysisDispatcher analysisDispatcher) {
+                                        AnalysisDispatcher analysisDispatcher,
+                                        LocalPathPolicy localPathPolicy,
+                                        @Value("${octopus.analysis.max-concurrent:2}") int maxConcurrentAnalyses) {
         this.repoConfigService = repoConfigService;
         this.gitService = gitService;
         this.projectScanService = projectScanService;
@@ -80,6 +88,34 @@ public class AnalysisOrchestrationService {
         this.psiExecutor = psiExecutor;
         this.localGitDetector = localGitDetector;
         this.analysisDispatcher = analysisDispatcher;
+        this.localPathPolicy = localPathPolicy;
+        this.analysisPermits = new Semaphore(Math.max(1, maxConcurrentAnalyses), true);
+        log.info("Analysis concurrency limit: {}", Math.max(1, maxConcurrentAnalyses));
+    }
+
+    /**
+     * 提交后台分析任务；任务在获得并发许可后才真正执行。
+     */
+    private void submitBounded(Long taskId, Runnable pipeline) {
+        analysisExecutor.submit(() -> {
+            boolean acquired = false;
+            try {
+                if (!analysisPermits.tryAcquire()) {
+                    log.info("Analysis task {} queued: all analysis slots are busy, waiting", taskId);
+                    analysisPermits.acquire();
+                }
+                acquired = true;
+                pipeline.run();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("Analysis task {} interrupted while waiting for a slot", taskId);
+                safeUpdateTaskFailed(taskId, "Interrupted before start (service shutting down)");
+            } finally {
+                if (acquired) {
+                    analysisPermits.release();
+                }
+            }
+        });
     }
 
     // -------------------------------------------------------------------------
@@ -102,7 +138,7 @@ public class AnalysisOrchestrationService {
         List<AnalysisTaskStep> steps = analysisTaskService.getSteps(task.getId());
 
         // Submit pipeline to background thread so the HTTP response returns immediately
-        analysisExecutor.submit(() -> {
+        submitBounded(task.getId(), () -> {
             MDC.put("taskId", String.valueOf(task.getId()));
             try {
                 executeFromStep(task, steps, repoConfig, 0);
@@ -124,10 +160,8 @@ public class AnalysisOrchestrationService {
      * @param request contains the absolute project path and optional project name
      */
     public AnalysisTask startLocalAnalysis(LocalAnalysisRequest request) {
-        Path localPath = Path.of(request.projectPath());
-        if (!Files.isDirectory(localPath)) {
-            throw new IllegalArgumentException("Path is not a valid directory: " + request.projectPath());
-        }
+        // 规范化 + 白名单校验（M4）：解析符号链接后必须位于 allowed-roots 之下
+        Path localPath = localPathPolicy.resolve(request.projectPath());
 
         String projectName = (request.projectName() != null && !request.projectName().isBlank())
                 ? request.projectName() : localPath.getFileName().toString();
@@ -152,7 +186,7 @@ public class AnalysisOrchestrationService {
 
         // Submit pipeline to background thread so the HTTP response returns immediately
         AnalysisTask finalTask = task;
-        analysisExecutor.submit(() -> runLocalPipeline(finalTask, localPath, projectName, branch, detectedCommitId));
+        submitBounded(finalTask.getId(), () -> runLocalPipeline(finalTask, localPath, projectName, branch, detectedCommitId));
 
         return analysisTaskService.getTask(task.getId());
     }
@@ -316,7 +350,7 @@ public class AnalysisOrchestrationService {
         int asyncStartIndex = startIndex; // effectively-final copy for the lambda
 
         // Submit retry to background thread
-        analysisExecutor.submit(() -> {
+        submitBounded(taskId, () -> {
             MDC.put("taskId", String.valueOf(taskId));
             try {
                 executeFromStep(task, steps, repoConfig, asyncStartIndex);
@@ -452,6 +486,12 @@ public class AnalysisOrchestrationService {
         }
     }
 
+    /** 按检出目录的构建文件选择语言适配器；未识别目录回退 JVM（保持既有行为）。 */
+    private ProjectAnalyzer analyzerOf(Path projectRoot) {
+        return analysisDispatcher.detectAnalyzer(projectRoot)
+                .orElseGet(analysisDispatcher::getJvmAnalyzer);
+    }
+
     // -------------------------------------------------------------------------
     // Pipeline execution
     // -------------------------------------------------------------------------
@@ -516,17 +556,26 @@ public class AnalysisOrchestrationService {
                     }
                     case "SCAN" -> {
                         if (snapshot == null) snapshot = gitService.syncAndCheckout(repoConfig, task.getTag());
-                        projects = projectScanService.scanProjects(snapshot);
+                        projects = analyzerOf(snapshot.repoLocalPath()).scanProjects(snapshot);
                     }
                     case "PARSE_DEEP" -> {
                         if (snapshot == null) snapshot = gitService.syncAndCheckout(repoConfig, task.getTag());
-                        if (projects == null) projects = projectScanService.scanProjects(snapshot);
-                        stepDegraded = processProjectsDeep(task, projects, repoConfig.getId(), branch, snapshot,
-                                branchBaselineTag, diffResult);
+                        ProjectAnalyzer stepAnalyzer = analyzerOf(snapshot.repoLocalPath());
+                        if (projects == null) projects = stepAnalyzer.scanProjects(snapshot);
+                        if ("JVM".equals(stepAnalyzer.getLanguage())) {
+                            stepDegraded = processProjectsDeep(task, projects, repoConfig.getId(), branch, snapshot,
+                                    branchBaselineTag, diffResult);
+                        } else {
+                            // 非 JVM（如 Go）：走 ProjectAnalyzer.analyzeDeep 的语言无关管线，
+                            // 语义与本地分析一致（清图→存节点→存元数据→存边→标记已分析）
+                            AnalysisContext deepCtx = new AnalysisContext(snapshot.repoLocalPath(), branch,
+                                    task.getCommitId(), repoConfig.getId(), task.getId());
+                            stepDegraded = stepAnalyzer.analyzeDeep(deepCtx, projects, snapshot);
+                        }
                     }
                     case "PARSE", "BUILD", "STORE_GRAPH", "STORE_METADATA" -> {
                         if (snapshot == null) snapshot = gitService.syncAndCheckout(repoConfig, task.getTag());
-                        if (projects == null) projects = projectScanService.scanProjects(snapshot);
+                        if (projects == null) projects = analyzerOf(snapshot.repoLocalPath()).scanProjects(snapshot);
                         processProjects(task, step.getStepName(), projects, repoConfig.getId(), branch, snapshot,
                                 branchBaselineTag, diffResult);
                     }
@@ -586,6 +635,8 @@ public class AnalysisOrchestrationService {
 
         for (DiscoveredProject project : projects) {
             AnalyzedProjectEntity projectEntity = findOrCreateProjectEntity(project, repoConfigId, branch);
+            projectEntity.setRepositoryRootPath(RepositoryIdentity.root(snapshot.repoLocalPath().toString()));
+            javaProjectRepository.save(projectEntity);
             Optional<DiffResult> projectDiff = resolveProjectDiff(projectEntity, project, snapshot,
                     branchBaselineTag, branchDiffResult, task.getTag());
 
@@ -660,6 +711,8 @@ public class AnalysisOrchestrationService {
                                  String branchBaselineTag, Optional<DiffResult> branchDiffResult) {
         for (DiscoveredProject project : projects) {
             AnalyzedProjectEntity projectEntity = findOrCreateProjectEntity(project, repoConfigId, branch);
+            projectEntity.setRepositoryRootPath(RepositoryIdentity.root(snapshot.repoLocalPath().toString()));
+            javaProjectRepository.save(projectEntity);
             Optional<DiffResult> projectDiff = resolveProjectDiff(projectEntity, project, snapshot,
                     branchBaselineTag, branchDiffResult, task.getTag());
 

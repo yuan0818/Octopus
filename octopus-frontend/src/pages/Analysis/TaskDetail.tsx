@@ -4,6 +4,7 @@ import { Card, Descriptions, Steps, Tag, Spin, Typography, Button, Space, Alert 
 import { ArrowLeftOutlined, ReloadOutlined, CheckCircleOutlined, CloseCircleOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { analysisApi } from '../../api/analysis';
 import type { AnalysisTask } from '../../types';
+import { palette, statusColor } from '../../theme';
 
 const { Text } = Typography;
 
@@ -16,14 +17,7 @@ const stepStatusMap: Record<string, 'finish' | 'process' | 'error' | 'wait'> = {
   DEGRADED: 'wait',
 };
 
-const stepColorMap: Record<string, string> = {
-  COMPLETED: '#52c41a',
-  RUNNING: '#1677ff',
-  FAILED: '#ff4d4f',
-  PENDING: '#d9d9d9',
-  SKIPPED: '#faad14',
-  DEGRADED: '#fa8c16',
-};
+const stepColorMap = statusColor;
 
 export default function TaskDetail() {
   const { taskId } = useParams<{ taskId: string }>();
@@ -116,7 +110,7 @@ export default function TaskDetail() {
                   </Text>
                 )}
                 {step.errorMessage && (
-                  <div style={{ color: step.status === 'DEGRADED' ? '#fa8c16' : '#ff4d4f', fontSize: 12, marginTop: 4 }}>
+                  <div style={{ color: step.status === 'DEGRADED' ? palette.orange : palette.error, fontSize: 12, marginTop: 4 }}>
                     {step.errorMessage}
                   </div>
                 )}

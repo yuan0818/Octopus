@@ -99,6 +99,8 @@ export interface MethodNodeInfo {
 export interface CallChainResult {
   root: MethodNodeInfo;
   chain: CallChainItem[];
+  /** 调用树超过服务端节点上限（octopus.query.call-chain.max-tree-nodes）时为 true，结果不完整 */
+  truncated?: boolean;
 }
 
 export interface CodePathStep {
@@ -315,6 +317,23 @@ export interface ProjectInfo {
   isApiService: boolean | null;
   buildTool: string | null;
   javaVersion: string | null;
+  repositoryKey?: string;
+  repositoryName?: string;
+  repositoryRootPath?: string;
+  modulePath?: string;
+}
+
+export interface RepositoryScope {
+  key: string;
+  name: string;
+  rootPath: string | null;
+  modules: { projectId: number; name: string; modulePath: string; branch: string | null; branches: string[] }[];
+}
+
+export interface RepositoryVersion {
+  commitId: string;
+  projectIds: number[];
+  missingProjectIds: number[];
 }
 
 /** Git 分支概要（来自 JGit 真实读取）。 */

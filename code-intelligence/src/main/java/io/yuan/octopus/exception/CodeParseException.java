@@ -3,7 +3,7 @@ package io.yuan.octopus.exception;
 /**
  * Exception for code parsing failures.
  */
-public class CodeParseException extends OctopusException {
+public class CodeParseException extends io.yuan.octopus.infra.common.OctopusException {
 
     public CodeParseException(String message) {
         super(message);

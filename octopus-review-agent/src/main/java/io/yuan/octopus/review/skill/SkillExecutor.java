@@ -2,8 +2,6 @@ package io.yuan.octopus.review.skill;
 
 import io.yuan.octopus.review.adapter.LLMAdapter.LLMResponse;
 import io.yuan.octopus.review.dto.*;
-import io.yuan.octopus.review.model.ModelConfig;
-import io.yuan.octopus.review.model.ModelRegistry;
 import io.yuan.octopus.review.service.LLMIntegrationService;
 import io.yuan.octopus.review.service.PromptBuilder;
 import io.yuan.octopus.review.service.ReviewResultParser;
@@ -36,20 +34,17 @@ public class SkillExecutor {
     private final ReviewResultParser resultParser;
     private final SchemaValidator schemaValidator;
     private final SkillValidator skillValidator;
-    private final ModelRegistry modelRegistry;
 
     public SkillExecutor(PromptBuilder promptBuilder,
                          LLMIntegrationService llmIntegration,
                          ReviewResultParser resultParser,
                          SchemaValidator schemaValidator,
-                         SkillValidator skillValidator,
-                         ModelRegistry modelRegistry) {
+                         SkillValidator skillValidator) {
         this.promptBuilder = promptBuilder;
         this.llmIntegration = llmIntegration;
         this.resultParser = resultParser;
         this.schemaValidator = schemaValidator;
         this.skillValidator = skillValidator;
-        this.modelRegistry = modelRegistry;
     }
 
     /**
@@ -76,10 +71,10 @@ public class SkillExecutor {
 
         int estimatedTokens = (systemPrompt.length() + userPrompt.length()) / 4;
 
-        // Step 3: Resolve LLM config
-        LLMConfig llmConfig = context.getLlmConfig() != null ? context.getLlmConfig() : new LLMConfig();
-        if (llmConfig.getProvider() == null) {
-            llmConfig.setProvider(skill.getPreferredProvider());
+        // The caller resolves model configuration independently of the Skill.
+        LLMConfig llmConfig = context.getLlmConfig();
+        if (llmConfig == null || llmConfig.getProvider() == null || llmConfig.getModel() == null) {
+            return SkillResult.failure(skillId, "请选择模型配置后执行 Skill");
         }
 
         // Step 4-6: Call LLM → Parse → Validate → Retry loop
@@ -239,7 +234,9 @@ public class SkillExecutor {
         int estimatedTokens = (systemPrompt.length() + userPrompt.length()) / 4;
         int totalChars = systemPrompt.length() + userPrompt.length();
 
-        ModelConfig model = modelRegistry.select(skill.getPreferredProvider(), "general");
+        LLMConfig config = context.getLlmConfig();
+        String provider = config != null && config.getProvider() != null ? config.getProvider() : "待选择";
+        String model = config != null && config.getModel() != null ? config.getModel() : "待选择";
 
         return new SkillExecutionPlan(
                 skill.getId(), skill.getName(),
@@ -251,15 +248,15 @@ public class SkillExecutor {
                                 "System + User prompt (" + totalChars + " chars)",
                                 Map.of("estimatedTokens", estimatedTokens)),
                         new SkillExecutionPlan.ExecutionStep(3, "调用 LLM（含自动重试）",
-                                skill.getPreferredProvider() + " / " + (model != null ? model.getModelId() : "unknown"),
-                                Map.of("provider", skill.getPreferredProvider())),
+                                provider + " / " + model,
+                                Map.of("provider", provider)),
                         new SkillExecutionPlan.ExecutionStep(4, "解析 + 校验",
                                 "Output parser: " + skill.getOutputParser() + " + SchemaValidator",
                                 Map.of("outputSchema", outputSchema))
                 ),
                 skill.getPromptTemplateId(),
-                skill.getPreferredProvider(),
-                model != null ? model.getModelId() : "unknown",
+                provider,
+                model,
                 estimatedTokens, totalChars,
                 context.getSourceCode().size(),
                 context.getChainMetadata().get("totalSignatures") instanceof Number n ? n.intValue() : 0,

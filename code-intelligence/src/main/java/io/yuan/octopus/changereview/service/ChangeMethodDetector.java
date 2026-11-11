@@ -62,7 +62,7 @@ public class ChangeMethodDetector {
     public List<ChangedMethod> detect(Path localPath, String baseCommitId,
                                       String patchsetCommitId, String mergeCommitId) {
         List<FileLineChanges> files = gitService.computeChangedLineRanges(
-                localPath, baseCommitId, patchsetCommitId);
+                localPath, baseCommitId, mergeCommitId);
         if (files.isEmpty()) {
             log.info("No Java file changes between base={} and patchset={} (BR-CTR-026)", baseCommitId, patchsetCommitId);
             return List.of();
@@ -72,12 +72,35 @@ public class ChangeMethodDetector {
         for (FileLineChanges file : files) {
             switch (file.changeType()) {
                 case "ADD" -> result.addAll(classifyAllMethods(file, mergeCommitId, "ADDED"));
-                case "MODIFY" -> result.addAll(classifyByLineRange(file, mergeCommitId));
-                case "DELETE", "RENAME" -> result.addAll(handleDeletedFile(file, baseCommitId));
+                case "MODIFY", "RENAME" -> {
+                    result.addAll(classifyByLineRange(file, mergeCommitId));
+                    result.addAll(classifyOldChanges(file, baseCommitId, mergeCommitId));
+                }
+                case "DELETE" -> result.addAll(handleDeletedFile(file, baseCommitId));
             }
         }
         log.info("Detected {} changed methods (base={} patchset={} merge={})",
                 result.size(), baseCommitId, patchsetCommitId, mergeCommitId);
+        return result.stream().distinct().toList();
+    }
+
+    private List<ChangedMethod> classifyOldChanges(FileLineChanges file, String base, String target) {
+        if (file.oldLineRanges().isEmpty() && !"RENAME".equals(file.changeType())) return List.of();
+        String oldPath = file.oldFilePath() != null ? file.oldFilePath() : file.filePath();
+        List<ClassInfo> oldClasses = classInfoRepository.findByCommitIdAndSourceFilePath(base, oldPath);
+        List<ClassInfo> newClasses = classInfoRepository.findByCommitIdAndSourceFilePath(target, file.filePath());
+        List<MethodInfo> newMethods = loadMethods(newClasses);
+        List<ChangedMethod> result = new ArrayList<>();
+        for (MethodInfo old : loadMethods(oldClasses)) {
+            if (!"RENAME".equals(file.changeType()) && (old.getLineStart() == null || old.getLineEnd() == null
+                    || !intersectsAnyRange(old.getLineStart(), old.getLineEnd(), file.oldLineRanges()))) continue;
+            MethodInfo current = newMethods.stream().filter(m -> java.util.Objects.equals(
+                    io.yuan.octopus.common.SignatureNormalizer.canonical(m.getMethodSignature()),
+                    io.yuan.octopus.common.SignatureNormalizer.canonical(old.getMethodSignature())))
+                    .findFirst().orElse(null);
+            result.add(current == null ? toChangedMethod(old, oldClasses, "DELETED")
+                    : toChangedMethod(current, newClasses, "MODIFIED"));
+        }
         return result;
     }
 

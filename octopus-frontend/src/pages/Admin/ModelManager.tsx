@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Card, Table, Button, Modal, Form, Input, Switch, Space, Tag, App, Select } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, PoweroffOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, PoweroffOutlined, ApiOutlined } from '@ant-design/icons';
 import { adminApi } from '../../api/admin';
 
 export default function ModelManager() {
@@ -36,7 +36,7 @@ export default function ModelManager() {
   const openEdit = (record: any) => {
     setEditing(record);
     // 密钥不回显：留空表示沿用已存密钥（后端加密存储）
-    form.setFieldsValue({ ...record, apiKey: '' });
+    form.setFieldsValue({ ...record, structuredOutput: record.structuredOutput || 'none', apiKey: '' });
     setModalOpen(true);
   };
 
@@ -64,18 +64,35 @@ export default function ModelManager() {
     });
   };
 
+  const [testing, setTesting] = useState<string | null>(null);
+  const handleTest = async (name: string) => {
+    setTesting(name);
+    try {
+      const result = await adminApi.testModel(name);
+      if (result.success) message.success(`${name}：${result.message}`);
+      else message.error(`${name}：${result.message}`);
+    } catch (e: any) {
+      message.error(String(e));
+    }
+    setTesting(null);
+  };
+
   const columns = [
     { title: '名称', dataIndex: 'name', key: 'name' },
     { title: 'Provider', dataIndex: 'provider', key: 'provider', render: (v: string) => <Tag>{v}</Tag> },
     { title: 'API 格式', dataIndex: 'apiFormat', key: 'apiFormat',
       render: (v: string, r: any) => <Tag color={(v || r.provider) === 'claude' ? 'purple' : 'blue'}>
         {v === 'claude' || (!v && r.provider === 'claude') ? 'Claude' : 'OpenAI 兼容'}</Tag> },
+    { title: '结构化输出', dataIndex: 'structuredOutput', key: 'structuredOutput', width: 110,
+      render: (v: string) => v === 'json_schema' ? <Tag color="green">JSON Schema</Tag>
+        : v === 'json_object' ? <Tag color="cyan">JSON 模式</Tag> : <Tag>不启用</Tag> },
     { title: 'Model ID', dataIndex: 'modelId', key: 'modelId', ellipsis: true },
     { title: 'API URL', dataIndex: 'apiUrl', key: 'apiUrl', ellipsis: true },
     { title: 'Max Tokens', dataIndex: 'maxTokens', key: 'maxTokens', width: 100 },
     { title: '启用', dataIndex: 'enabled', key: 'enabled', width: 60, render: (v: boolean) => (v ? '✅' : '❌') },
-    { title: '操作', key: 'action', width: 120, render: (_: any, r: any) => (
+    { title: '操作', key: 'action', width: 150, render: (_: any, r: any) => (
       <Space>
+        <Button size="small" icon={<ApiOutlined />} title="测试连通与结构化输出" loading={testing === r.name} onClick={() => handleTest(r.name)} />
         <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} />
         <Button size="small" icon={<PoweroffOutlined />} onClick={async () => { await adminApi.toggleModel(r.name); load(); }} />
         <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(r.name)} />
@@ -96,6 +113,21 @@ export default function ModelManager() {
               { value: 'openai', label: 'OpenAI 兼容' },
               { value: 'claude', label: 'Claude (Anthropic)' },
             ]} />
+          </Form.Item>
+          <Form.Item noStyle dependencies={['apiFormat', 'provider']}>
+            {({ getFieldValue }) => {
+              const claude = (getFieldValue('apiFormat') || (getFieldValue('provider') === 'claude' ? 'claude' : 'openai')) === 'claude';
+              return (
+                <Form.Item name="structuredOutput" label="结构化输出" initialValue="none"
+                  tooltip="只影响用例生成的 Planner 与 Operator 调用。JSON 模式只保证返回合法 JSON（DeepSeek/GLM 等）；JSON Schema 按固定结构约束返回内容（GPT、新版 Qwen、Claude）。保存后请点“测试”确认端点支持所选模式">
+                  <Select options={[
+                    { value: 'none', label: '不启用' },
+                    { value: 'json_object', label: 'JSON 模式', disabled: claude },
+                    { value: 'json_schema', label: 'JSON Schema' },
+                  ]} />
+                </Form.Item>
+              );
+            }}
           </Form.Item>
           <Form.Item name="modelId" label="Model ID" rules={[{ required: true }]}><Input placeholder="claude-sonnet-4-20250514" /></Form.Item>
           <Form.Item name="apiUrl" label="API URL" rules={[{ required: true }]}><Input placeholder="https://api.anthropic.com/v1" /></Form.Item>

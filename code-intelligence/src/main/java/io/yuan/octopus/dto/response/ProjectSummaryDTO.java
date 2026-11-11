@@ -9,5 +9,9 @@ public record ProjectSummaryDTO(
     Boolean isBackendProject,
     Boolean isApiService,
     String buildTool,
-    String javaVersion
+    String javaVersion,
+    String repositoryKey,
+    String repositoryName,
+    String repositoryRootPath,
+    String modulePath
 ) {}

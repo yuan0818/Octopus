@@ -25,4 +25,6 @@ services:
     container_name: octopus-frontend
     ports:
       - "3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # Linux 下让 nginx 访问宿主机上的后端
 

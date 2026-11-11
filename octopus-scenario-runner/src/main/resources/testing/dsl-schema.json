@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://octopus.local/schemas/business-test-dsl-1.json",
+  "title": "Octopus 业务 API 测试 DSL",
+  "description": "严格线性的 API 测试场景：只声明调用、依赖与验证。不支持分支、循环、重试或并行。",
+  "type": "object",
+  "required": ["feature", "scenarios"],
+  "additionalProperties": false,
+  "properties": {
+    "feature": { "type": "string", "description": "特性名称" },
+    "project": { "type": "string", "description": "说明性的项目 / 模块范围；实际解析版本由导入时选择" },
+    "environment": { "type": "string" },
+    "background": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "steps": { "$ref": "#/$defs/steps" } }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["name", "steps"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,79}$", "description": "稳定标识，用于重导入匹配" },
+          "tags": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,40}$" } },
+          "description": { "type": "string" },
+          "inputs": {
+            "type": "object",
+            "description": "场景输入 ${input.名称}",
+            "additionalProperties": { "enum": ["string", "integer", "number", "boolean", "object", "array"] }
+          },
+          "steps": { "$ref": "#/$defs/steps" },
+          "cleanup": { "$ref": "#/$defs/steps" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "steps": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "oneOf": [
+          { "type": "string", "pattern": "^((GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\\s+)?/", "description": "METHOD /path 简写" },
+          { "$ref": "#/$defs/step" }
+        ]
+      }
+    },
+    "values": {
+      "type": "object",
+      "description": "字面量、${步骤别名.字段}、${env.x}、${secret.x}、${input.x}、${fn.函数(参数)}；在 { } 中使用 ${...} 时请加引号"
+    },
+    "duration": { "type": ["string", "integer"], "pattern": "^[0-9]{1,7}\\s*(ms|s|m)?$" },
+    "step": {
+      "type": "object",
+      "required": ["call"],
+      "additionalProperties": false,
+      "properties": {
+        "call": { "type": "string", "pattern": "^((GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\\s+)?/", "description": "要调用的 API 路径" },
+        "name": { "type": "string" },
+        "service": { "type": "string", "description": "同一路径被多个实现暴露时用于区分" },
+        "with": { "$ref": "#/$defs/values" },
+        "query": { "$ref": "#/$defs/values" },
+        "headers": { "$ref": "#/$defs/values" },
+        "body": { "description": "完整请求体（覆盖项）" },
+        "as": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,59}$", "description": "本步骤回应的名称，供后续 ${名称.字段} 引用" },
+        "from": { "oneOf": [ { "type": "string" }, { "type": "array", "items": { "type": "string" } } ], "description": "依赖的前序步骤（字段对应由平台推导）" },
+        "expect": {
+          "description": "status N、$.路径 == 值、$.路径 exists、conforms，或 {status: N, $.路径: 值}",
+          "oneOf": [ { "type": "string" }, { "type": "object" }, { "type": "array" } ]
+        },
+        "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "wait": { "$ref": "#/$defs/duration", "description": "发送请求前的固定等待，≤60s" },
+        "poll": {
+          "description": "仅限已显式授权可轮询的 API：true 使用授权参数，或在授权范围内收紧",
+          "oneOf": [
+            { "const": true },
+            { "type": "object", "required": ["every", "within"], "additionalProperties": false,
+              "properties": { "every": { "$ref": "#/$defs/duration" }, "within": { "$ref": "#/$defs/duration" } } }
+          ]
+        },
+        "role": { "enum": ["GIVEN", "WHEN", "THEN", "given", "when", "then"] }
+      }
+    }
+  }
+}

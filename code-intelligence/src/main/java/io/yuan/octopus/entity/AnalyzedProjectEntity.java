@@ -37,6 +37,10 @@ public class AnalyzedProjectEntity {
     @Column(name = "project_path", length = 500)
     private String projectPath;
 
+    /** Workspace / Git root retained even when the root has no compilable source. */
+    @Column(name = "repository_root_path", length = 1000)
+    private String repositoryRootPath;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "build_tool", length = 20)
     private BuildTool buildTool;

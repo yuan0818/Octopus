@@ -1,0 +1,53 @@
+# Phase 2.6：PSI 抽取 golden 检查（每晚 / 手动）。需要 IntelliJ IDEA 2025.3（Linux tar.gz），
+# 在仓库变量 IDEA_DOWNLOAD_URL 中配置下载地址；未配置时跳过。
+name: PSI golden
+
+on:
+  schedule:
+    - cron: "0 19 * * *"     # 每天 03:00（UTC+8）
+  workflow_dispatch:
+
+jobs:
+  golden:
+    if: ${{ vars.IDEA_DOWNLOAD_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Cache IntelliJ IDEA
+        id: idea-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/idea
+          key: idea-${{ vars.IDEA_DOWNLOAD_URL }}
+      - name: Download IntelliJ IDEA
+        if: steps.idea-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/idea
+          curl -fsSL "${{ vars.IDEA_DOWNLOAD_URL }}" | tar -xz -C ~/idea --strip-components=1
+      - name: Start analyzer service
+        env:
+          IDEA_HOME: /home/runner/idea
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb >/dev/null
+          (xvfb-run -a ./run-jvm-analyzer-local.sh > analyzer.out 2>&1 &)
+          for i in $(seq 1 120); do
+            if curl -fs http://localhost:8377/health >/dev/null; then echo "analyzer ready"; exit 0; fi
+            sleep 10
+          done
+          echo "analyzer did not start"; tail -200 analyzer.out; exit 1
+      - name: Check golden expectations
+        run: python3 jvm-project-analyzer/golden/check_golden.py --url http://localhost:8377
+      - name: Upload analyzer log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: psi-golden-logs
+          path: |
+            analyzer.out
+            logs/jvm-analyzer-service.log

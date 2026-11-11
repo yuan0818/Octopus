@@ -1,0 +1,68 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot'
+    id 'io.spring.dependency-management'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+dependencies {
+    implementation project(':octopus-jmeter-ext')
+    implementation platform(project(':octopus-infra:infra-bom'))
+    implementation project(':octopus-infra:infra-common')
+    implementation project(':octopus-infra:infra-mysql')
+    implementation project(':octopus-infra:infra-neo4j')
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'com.mysql:mysql-connector-j'
+    implementation 'com.google.code.gson:gson'
+    // DSL：只组合 YAML 节点树（保留行列号，不构造对象）；版本由 Spring Boot 管理
+    implementation 'org.yaml:snakeyaml'
+    // JMeter 嵌入式执行（进程内 Java API，无外部依赖）
+    implementation 'org.apache.jmeter:ApacheJMeter_core:5.6.3'
+    implementation 'org.apache.jmeter:ApacheJMeter_http:5.6.3'
+    implementation 'org.apache.jmeter:jorphan:5.6.3'
+    implementation 'org.apache.jmeter:ApacheJMeter_components:5.6.3'
+    implementation 'org.apache.jmeter:ApacheJMeter_java:5.6.3'
+    testImplementation 'org.neo4j.test:neo4j-harness:5.26.0'
+    testImplementation project(':code-intelligence')
+    testImplementation 'org.eclipse.jgit:org.eclipse.jgit'
+    testRuntimeOnly 'com.h2database:h2'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'redis.clients:jedis:5.2.0'
+    testImplementation 'org.apache.kafka:kafka-clients:4.1.2'
+    testImplementation 'cn.hutool:hutool-http:5.8.16'
+    // 与 JMeter 5.6.3 内置的 Groovy 版本一致，用于直接执行 JMX 模板脚本（assert.groovy 等）做单元测试
+    testImplementation 'org.codehaus.groovy:groovy:3.0.20'
+    testImplementation 'org.codehaus.groovy:groovy-json:3.0.20'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+// The embedded Neo4j 5.26 test server requires Netty 4.1. Production stays on the platform BOM.
+configurations.matching { it.name in ['testRuntimeClasspath', 'testCompileClasspath'] }.all {
+    exclude group: 'org.neo4j', module: 'neo4j-slf4j-provider'
+    resolutionStrategy.eachDependency { details ->
+        if (details.requested.group == 'io.netty' && !details.requested.name.startsWith('netty-tcnative')) {
+            details.useVersion '4.1.115.Final'
+        }
+        if (details.requested.group == 'org.neo4j.driver') {
+            details.useVersion '5.27.0'
+        }
+    }
+}
+
+// Isolated local smoke environment: temporary Neo4j + H2, no existing database writes.
+tasks.register('businessTestingDemo', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'io.yuan.octopus.scenario.testing.IsolatedBusinessTestingServer'
+}

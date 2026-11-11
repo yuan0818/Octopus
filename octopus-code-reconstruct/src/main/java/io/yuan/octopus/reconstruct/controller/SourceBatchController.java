@@ -30,6 +30,11 @@ public class SourceBatchController {
     public record Item(String filePath, int lineStart, int lineEnd) {}
     public record ItemResult(boolean found, String content, String error) {}
 
+    @GetMapping("/source/tree")
+    public Result<List<String>> tree(@RequestParam long projectId, @RequestParam String commitId) {
+        return Result.success(gitSourceProvider.tree(projectId, commitId));
+    }
+
     @PostMapping("/source/batch")
     public Result<List<ItemResult>> batch(@RequestBody BatchRequest request) {
         if (request == null || request.projectId() == null || request.items() == null) {

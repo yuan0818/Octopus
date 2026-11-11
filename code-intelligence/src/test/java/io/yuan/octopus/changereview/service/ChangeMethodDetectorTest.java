@@ -34,7 +34,7 @@ class ChangeMethodDetectorTest {
     void shouldIdentifyAddedMethodsFromNewFile() {
         FileLineChanges addFile = new FileLineChanges(
                 "/data/repos/test-repo/src/NewClass.java", null, "ADD", List.of());
-        when(gitService.computeChangedLineRanges(LOCAL, BASE, PATCHSET))
+        when(gitService.computeChangedLineRanges(LOCAL, BASE, MERGE))
                 .thenReturn(List.of(addFile));
 
         ClassInfo cls = buildClass(1L, 10L, "com.NewClass", addFile.filePath());
@@ -60,7 +60,7 @@ class ChangeMethodDetectorTest {
         List<int[]> ranges = List.of(new int[]{10, 20}); // lines 10-20 changed
         FileLineChanges modFile = new FileLineChanges(
                 "/data/repos/test-repo/src/ModClass.java", null, "MODIFY", ranges);
-        when(gitService.computeChangedLineRanges(LOCAL, BASE, PATCHSET))
+        when(gitService.computeChangedLineRanges(LOCAL, BASE, MERGE))
                 .thenReturn(List.of(modFile));
 
         ClassInfo cls = buildClass(1L, 10L, "com.ModClass", modFile.filePath());
@@ -84,7 +84,7 @@ class ChangeMethodDetectorTest {
         FileLineChanges delFile = new FileLineChanges(
                 "/data/repos/test-repo/src/Deleted.java", "/data/repos/test-repo/src/Deleted.java",
                 "DELETE", List.of());
-        when(gitService.computeChangedLineRanges(LOCAL, BASE, PATCHSET))
+        when(gitService.computeChangedLineRanges(LOCAL, BASE, MERGE))
                 .thenReturn(List.of(delFile));
 
         ClassInfo baseCls = buildClass(1L, 10L, "com.Deleted", delFile.filePath());
@@ -106,7 +106,7 @@ class ChangeMethodDetectorTest {
     void shouldSkipDeletedWhenBaseNotAnalyzed() {
         FileLineChanges delFile = new FileLineChanges(
                 "/data/repos/test-repo/src/Deleted.java", null, "DELETE", List.of());
-        when(gitService.computeChangedLineRanges(LOCAL, BASE, PATCHSET))
+        when(gitService.computeChangedLineRanges(LOCAL, BASE, MERGE))
                 .thenReturn(List.of(delFile));
         when(classInfoRepository.findByCommitIdAndSourceFilePath(BASE, delFile.filePath()))
                 .thenReturn(List.of()); // base version not available
@@ -119,7 +119,7 @@ class ChangeMethodDetectorTest {
 
     @Test
     void shouldHandleEmptyChanges() {
-        when(gitService.computeChangedLineRanges(LOCAL, BASE, PATCHSET)).thenReturn(List.of());
+        when(gitService.computeChangedLineRanges(LOCAL, BASE, MERGE)).thenReturn(List.of());
 
         ChangeMethodDetector detector = new ChangeMethodDetector(gitService, classInfoRepository, methodInfoRepository);
         List<ChangedMethod> result = detector.detect(LOCAL, BASE, PATCHSET, MERGE);
@@ -131,7 +131,7 @@ class ChangeMethodDetectorTest {
         FileLineChanges addFile = new FileLineChanges("/f/New.java", null, "ADD", List.of());
         FileLineChanges modFile = new FileLineChanges("/f/Mod.java", null, "MODIFY",
                 List.of(new int[]{5, 8}));
-        when(gitService.computeChangedLineRanges(LOCAL, BASE, PATCHSET))
+        when(gitService.computeChangedLineRanges(LOCAL, BASE, MERGE))
                 .thenReturn(List.of(addFile, modFile));
 
         ClassInfo clsNew = buildClass(1L, 10L, "com.New", addFile.filePath());
@@ -155,6 +155,23 @@ class ChangeMethodDetectorTest {
     }
 
     // ── helpers ──
+
+    @Test
+    void shouldDetectRemovedGuardInsideSurvivingMethodFromOldCoordinates() {
+        String path = "/data/repos/test-repo/Order.java";
+        var file = new FileLineChanges(path, path, "MODIFY", List.of(), List.of(new int[]{12, 12}));
+        when(gitService.computeChangedLineRanges(LOCAL, BASE, MERGE)).thenReturn(List.of(file));
+        var oldClass = buildClass(1L, 10L, "Order", path);
+        var newClass = buildClass(2L, 10L, "Order", path);
+        var oldMethod = buildMethod(1L, oldClass, "refund", "Order.refund()", 10, 20);
+        var newMethod = buildMethod(2L, newClass, "refund", "Order.refund()", 10, 19);
+        when(classInfoRepository.findByCommitIdAndSourceFilePath(BASE, path)).thenReturn(List.of(oldClass));
+        when(classInfoRepository.findByCommitIdAndSourceFilePath(MERGE, path)).thenReturn(List.of(newClass));
+        when(methodInfoRepository.findByClassInfoIdIn(List.of(1L))).thenReturn(List.of(oldMethod));
+        when(methodInfoRepository.findByClassInfoIdIn(List.of(2L))).thenReturn(List.of(newMethod));
+        var result = new ChangeMethodDetector(gitService, classInfoRepository, methodInfoRepository).detect(LOCAL, BASE, PATCHSET, MERGE);
+        assertEquals(1, result.size());assertEquals("MODIFIED", result.getFirst().changeType());
+    }
 
     private ClassInfo buildClass(Long id, Long projectId, String qname, String filePath) {
         ClassInfo c = ClassInfo.builder().id(id).projectId(projectId)

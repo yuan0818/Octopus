@@ -15,7 +15,9 @@ import org.springframework.context.annotation.Configuration;
 public class RabbitConfig {
 
     public static final String JAVA_QUEUE = "octopus.analysis.java";
+    public static final String GO_QUEUE = "octopus.analysis.go";
     public static final String RETRY_QUEUE = "octopus.analysis.retry";
+    public static final String GO_RETRY_QUEUE = "octopus.analysis.go.retry";
     public static final String DLX = "octopus.analysis.dlx";
     public static final long RETRY_TTL_MILLIS = 30000L;
 
@@ -26,6 +28,16 @@ public class RabbitConfig {
         return QueueBuilder.durable(JAVA_QUEUE)
                 .withArgument("x-dead-letter-exchange", DLX)
                 .withArgument("x-dead-letter-routing-key", "retry")
+                .withArgument("x-max-length", 10000)
+                .withArgument("x-overflow", "drop-head")
+                .build();
+    }
+
+    @Bean
+    public Queue goQueue() {
+        return QueueBuilder.durable(GO_QUEUE)
+                .withArgument("x-dead-letter-exchange", DLX)
+                .withArgument("x-dead-letter-routing-key", "retry.go")
                 .withArgument("x-max-length", 10000)
                 .withArgument("x-overflow", "drop-head")
                 .build();
@@ -43,6 +55,16 @@ public class RabbitConfig {
     }
 
     @Bean
+    public Queue goRetryQueue() {
+        // 回投 GO 主队列：与 JAVA 的 retry 队列同模式，仅路由目标不同
+        return QueueBuilder.durable(GO_RETRY_QUEUE)
+                .withArgument("x-dead-letter-exchange", "")
+                .withArgument("x-dead-letter-routing-key", GO_QUEUE)
+                .withArgument("x-message-ttl", RETRY_TTL_MILLIS)
+                .build();
+    }
+
+    @Bean
     public DirectExchange deadLetterExchange() {
         return new DirectExchange(DLX);
     }
@@ -50,6 +72,11 @@ public class RabbitConfig {
     @Bean
     public Binding retryBinding() {
         return BindingBuilder.bind(retryQueue()).to(deadLetterExchange()).with("retry");
+    }
+
+    @Bean
+    public Binding goRetryBinding() {
+        return BindingBuilder.bind(goRetryQueue()).to(deadLetterExchange()).with("retry.go");
     }
 
     @Bean

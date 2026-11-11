@@ -1,4 +1,6 @@
 import http from './reviewClient';
+// Lookup 数据（项目/类/方法）由 code-intelligence 提供：表归其所有，review-agent 不再跨服务直读
+import queryHttp from './client';
 import reconstructHttp from './reconstructClient';
 import type { ReviewRequest, ReviewResponse } from '../types';
 
@@ -10,27 +12,27 @@ async function unwrap<T>(promise: Promise<any>): Promise<T> {
 
 export const reviewApi = {
   // ── Lookup ──
-  listProjects(): Promise<any[]> { return unwrap(http.get('/lookup/projects')); },
+  listProjects(): Promise<any[]> { return unwrap(queryHttp.get('/lookup/projects')); },
   listClasses(projectId: number, q?: string, branch?: string | null, commitId?: string | null): Promise<any[]> {
-    return unwrap(http.get('/lookup/classes', { params: { projectId, q, branch: branch ?? undefined, commitId: commitId ?? undefined } }));
+    return unwrap(queryHttp.get('/lookup/classes', { params: { projectId, q, branch: branch ?? undefined, commitId: commitId ?? undefined } }));
   },
   listEndpointClasses(projectId: number, q?: string, branch?: string | null, commitId?: string | null): Promise<any[]> {
-    return unwrap(http.get('/lookup/endpoint-classes', { params: { projectId, q, branch: branch ?? undefined, commitId: commitId ?? undefined } }));
+    return unwrap(queryHttp.get('/lookup/endpoint-classes', { params: { projectId, q, branch: branch ?? undefined, commitId: commitId ?? undefined } }));
   },
   listEntryClasses(projectId: number, q?: string, branch?: string | null, commitId?: string | null): Promise<any[]> {
-    return unwrap(http.get('/lookup/entry-classes', { params: { projectId, q, branch: branch ?? undefined, commitId: commitId ?? undefined } }));
+    return unwrap(queryHttp.get('/lookup/entry-classes', { params: { projectId, q, branch: branch ?? undefined, commitId: commitId ?? undefined } }));
   },
   listMethods(classId: number, q?: string, branch?: string | null, commitId?: string | null): Promise<any[]> {
-    return unwrap(http.get('/lookup/methods', { params: { classId, q, branch: branch ?? undefined, commitId: commitId ?? undefined } }));
+    return unwrap(queryHttp.get('/lookup/methods', { params: { classId, q, branch: branch ?? undefined, commitId: commitId ?? undefined } }));
   },
   listEndpointMethods(classId: number, q?: string, branch?: string | null, commitId?: string | null): Promise<any[]> {
-    return unwrap(http.get('/lookup/endpoint-methods', { params: { classId, q, branch: branch ?? undefined, commitId: commitId ?? undefined } }));
+    return unwrap(queryHttp.get('/lookup/endpoint-methods', { params: { classId, q, branch: branch ?? undefined, commitId: commitId ?? undefined } }));
   },
   listEntryMethods(classId: number, q?: string, branch?: string | null, commitId?: string | null): Promise<any[]> {
-    return unwrap(http.get('/lookup/entry-methods', { params: { classId, q, branch: branch ?? undefined, commitId: commitId ?? undefined } }));
+    return unwrap(queryHttp.get('/lookup/entry-methods', { params: { classId, q, branch: branch ?? undefined, commitId: commitId ?? undefined } }));
   },
   searchClasses(q: string, projectId?: number): Promise<any[]> {
-    return unwrap(http.get('/lookup/search', { params: { q, projectId } }));
+    return unwrap(queryHttp.get('/lookup/search', { params: { q, projectId } }));
   },
 
   // ── Review ──

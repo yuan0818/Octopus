@@ -1,0 +1,85 @@
+{
+  "flowId": "token_binding_example",
+  "revision": 0,
+  "name": "Two step authentication",
+  "initialContext": {
+    "credentials": {
+      "type": "object",
+      "sensitive": true
+    }
+  },
+  "nodes": [
+    {
+      "id": "verify",
+      "label": "Verify",
+      "operationRef": "auth.verify@v1",
+      "inputs": {
+        "token": {
+          "source": "context",
+          "value": "auth.token"
+        }
+      },
+      "outputs": [],
+      "states": [],
+      "waitMillis": 0
+    },
+    {
+      "id": "login",
+      "label": "Login",
+      "operationRef": "auth.login@v1",
+      "inputs": {
+        "body": {
+          "source": "context",
+          "value": "credentials"
+        }
+      },
+      "outputs": [
+        {
+          "key": "auth.token",
+          "path": "$.token",
+          "type": "string",
+          "sensitive": true
+        }
+      ],
+      "states": [],
+      "waitMillis": 0
+    }
+  ],
+  "dependencies": [],
+  "stateModels": [],
+  "testPoints": [
+    {
+      "id": "normal",
+      "title": "Token propagation",
+      "covers": [
+        "verify"
+      ],
+      "assertions": {
+        "login": [
+          {
+            "id": "status",
+            "kind": "STATUS_EQUALS",
+            "path": null,
+            "expected": 200.0
+          }
+        ],
+        "verify": [
+          {
+            "id": "status",
+            "kind": "STATUS_EQUALS",
+            "path": null,
+            "expected": 200.0
+          },
+          {
+            "id": "ok",
+            "kind": "JSON_EQUALS",
+            "path": "$.ok",
+            "expected": true
+          }
+        ]
+      },
+      "inputOverrides": {},
+      "intentionallyViolatedRule": null
+    }
+  ]
+}

@@ -15,6 +15,7 @@ public class ModelConfig {
     private Double temperature;     // 默认温度
     private boolean enabled;        // 是否启用
     private int weight = 100;       // 路由权重（同 provider 多模型时按权重分配）
+    private String structuredOutput; // 结构化输出：null/none、json_object、json_schema（见 StructuredOutputMode）
 
     public ModelConfig() {}
 
@@ -30,6 +31,9 @@ public class ModelConfig {
     }
 
     // ── Getters & Setters ──
+
+    public String getStructuredOutput() { return structuredOutput; }
+    public void setStructuredOutput(String structuredOutput) { this.structuredOutput = structuredOutput; }
 
     public String getApiFormat() { return apiFormat; }
     public void setApiFormat(String apiFormat) { this.apiFormat = apiFormat; }

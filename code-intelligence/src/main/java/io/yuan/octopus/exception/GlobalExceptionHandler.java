@@ -33,9 +33,9 @@ public class GlobalExceptionHandler {
         return Result.error(500, e.getMessage());
     }
 
-    @ExceptionHandler(OctopusException.class)
+    @ExceptionHandler(io.yuan.octopus.infra.common.OctopusException.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
-    public Result<Void> handleOctopusException(OctopusException e) {
+    public Result<Void> handleOctopusException(io.yuan.octopus.infra.common.OctopusException e) {
         return Result.error(500, e.getMessage());
     }
 }

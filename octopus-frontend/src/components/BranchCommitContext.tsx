@@ -1,37 +1,7 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, type ReactNode } from 'react';
+import { BranchCommitContext } from './branchCommitState';
 import { queryApi } from '../api/query';
 import type { ProjectInfo } from '../types';
-
-interface BranchCommitState {
-  projectId: number | null;
-  branch: string | null;
-  commitId: string | null;
-  projectName: string | null;
-  projects: ProjectInfo[];
-  setProject: (projectId: number) => void;
-  setBranch: (branch: string | null) => void;
-  setCommitId: (commitId: string | null) => void;
-  loading: boolean;
-  /** 项目列表加载失败（选择器据此给出可见的错误提示）。 */
-  loadError: boolean;
-}
-
-const BranchCommitContext = createContext<BranchCommitState>({
-  projectId: null,
-  branch: null,
-  commitId: null,
-  projectName: null,
-  projects: [],
-  setProject: () => {},
-  setBranch: () => {},
-  setCommitId: () => {},
-  loading: false,
-  loadError: false,
-});
-
-export function useBranchCommit() {
-  return useContext(BranchCommitContext);
-}
 
 export function BranchCommitProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);

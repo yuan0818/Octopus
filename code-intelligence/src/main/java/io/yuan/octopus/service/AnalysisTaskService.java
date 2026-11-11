@@ -110,6 +110,37 @@ public class AnalysisTaskService {
         analysisTaskRepository.save(task);
     }
 
+    /**
+     * 把上次进程退出时仍为 RUNNING 的任务标记为 FAILED，使其可通过 /retry 从中断的步骤续跑。
+     * <p>
+     * 分析管线跑在进程内的线程池里，进程退出后这些任务不可能再推进；不处理的话它们会
+     * 永远停在 RUNNING，前端一直轮询。中断步骤（RUNNING，若没有则第一个 PENDING）
+     * 标为 FAILED，{@code retryAnalysis} 会从这一步开始重跑。
+     *
+     * @return 被标记的任务数
+     */
+    @Transactional
+    public int failInterruptedTasks(String reason) {
+        List<AnalysisTask> running = analysisTaskRepository.findByStatus("RUNNING");
+        for (AnalysisTask task : running) {
+            List<AnalysisTaskStep> steps = analysisTaskStepRepository.findByTaskIdOrderByIdAsc(task.getId());
+            AnalysisTaskStep interrupted = steps.stream()
+                    .filter(s -> "RUNNING".equals(s.getStatus())).findFirst()
+                    .orElseGet(() -> steps.stream()
+                            .filter(s -> "PENDING".equals(s.getStatus())).findFirst().orElse(null));
+            if (interrupted != null) {
+                interrupted.setStatus("FAILED");
+                interrupted.setErrorMessage(reason);
+                interrupted.setCompletedAt(LocalDateTime.now());
+                analysisTaskStepRepository.save(interrupted);
+            }
+            task.setStatus("FAILED");
+            task.setErrorMessage(reason);
+            analysisTaskRepository.save(task);
+        }
+        return running.size();
+    }
+
     public AnalysisTask getTask(Long taskId) {
         return analysisTaskRepository.findById(taskId)
                 .orElseThrow(() -> new ResourceNotFoundException("AnalysisTask not found with id: " + taskId));

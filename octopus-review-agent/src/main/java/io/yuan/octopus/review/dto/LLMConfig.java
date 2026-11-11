@@ -9,6 +9,13 @@ public class LLMConfig {
     private Double temperature = 0.3;
     private String apiKey;
     private String apiUrl;
+    private Integer requestTimeoutSeconds = 120;
+    /** 原生结构化输出；null 表示不启用（SO-001）。 */
+    private ResponseFormat responseFormat;
+    public ResponseFormat getResponseFormat() { return responseFormat; }
+    public void setResponseFormat(ResponseFormat format) { responseFormat = format; }
+    public Integer getRequestTimeoutSeconds() { return requestTimeoutSeconds; }
+    public void setRequestTimeoutSeconds(Integer seconds) { requestTimeoutSeconds = seconds; }
 
     public String getProvider() { return provider; }
     public void setProvider(String provider) { this.provider = provider; }

@@ -1,0 +1,275 @@
+package io.yuan.octopus.controller;
+
+import io.yuan.octopus.infra.common.Result;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Provides lookup data for the frontend: projects, classes, methods.
+ * Eliminates manual entry of project IDs, class names, and method names.
+ * <p>
+ * 归属：这些查询读取的 analyzed_project / class_info / method_info / annotation_info 均由
+ * code-intelligence 写入和维护，因此查询也放在 code-intelligence。此前该控制器位于
+ * octopus-review-agent，用 JdbcTemplate 跨服务直读这些表，表结构一变要到运行时才会出错。
+ */
+@RestController
+@RequestMapping("/api/lookup")
+public class LookupController {
+
+    private static final String HTTP_ENTRY_ANNOTATION_SQL = "'GetMapping','PostMapping','PutMapping','DeleteMapping','PatchMapping','RequestMapping'";
+    private static final String BUSINESS_ENTRY_ANNOTATION_SQL = HTTP_ENTRY_ANNOTATION_SQL
+            + ",'Scheduled','EventListener','KafkaListener','RabbitListener','JmsListener','SqsListener','RocketMQMessageListener'";
+
+    private final JdbcTemplate jdbc;
+
+    public LookupController(JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    /** List all projects with their IDs and names. */
+    @GetMapping("/projects")
+    public Result<List<Map<String, Object>>> listProjects() {
+        List<Map<String, Object>> projects = jdbc.queryForList(
+                "SELECT id, project_name, branch, commit_id, is_api_service, is_backend_project, analyzed_at " +
+                "FROM analyzed_project ORDER BY analyzed_at DESC LIMIT 50");
+        return Result.success(projects);
+    }
+
+    /** List classes in a project (full-text search or prefix match). */
+    @GetMapping("/classes")
+    public Result<List<Map<String, Object>>> listClasses(
+            @RequestParam Long projectId,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String branch,
+            @RequestParam(required = false) String commitId) {
+        // 版本过滤（对应 BR-DIFF-011）：
+        //   commitId 非空 → 精确匹配 commit_id；为空 → is_head = true（HEAD）
+        boolean versioned = commitId != null && !commitId.isBlank();
+        boolean hasBranch = branch != null && !branch.isBlank();
+        String versionClause = versioned ? "AND ci.commit_id = ?" : "AND ci.is_head = 1";
+        String branchClause = hasBranch ? "AND ci.branch = ?" : "";
+        String sql;
+        List<Object> params = new ArrayList<>();
+        if (q != null && !q.isBlank()) {
+            sql = "SELECT ci.id, ci.qualified_name, ci.simple_name, ci.class_type " +
+                  "FROM class_info ci WHERE ci.project_id = ? AND ci.qualified_name LIKE ? " +
+                  versionClause + " " + branchClause + " " +
+                  "ORDER BY ci.qualified_name LIMIT 100";
+            params.add(projectId);
+            params.add(like(q));
+        } else {
+            sql = "SELECT ci.id, ci.qualified_name, ci.simple_name, ci.class_type " +
+                  "FROM class_info ci WHERE ci.project_id = ? " +
+                  versionClause + " " + branchClause + " " +
+                  "ORDER BY ci.qualified_name LIMIT 200";
+            params.add(projectId);
+        }
+        if (versioned) params.add(commitId);
+        if (hasBranch) params.add(branch);
+        return Result.success(jdbc.queryForList(sql, params.toArray()));
+    }
+
+    /** List methods in a class. */
+    @GetMapping("/methods")
+    public Result<List<Map<String, Object>>> listMethods(
+            @RequestParam Long classId,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String branch,
+            @RequestParam(required = false) String commitId) {
+        // 版本过滤：method_info 含 commit_id/is_head 列（branch 通过 class_info JOIN 可选限定）
+        boolean versioned = commitId != null && !commitId.isBlank();
+        boolean hasBranch = branch != null && !branch.isBlank();
+        String versionClause = versioned ? "AND mi.commit_id = ?" : "AND mi.is_head = 1";
+        String joinClause = hasBranch
+                ? "JOIN class_info ci ON mi.class_id = ci.id AND ci.branch = ?"
+                : "";
+        String sql;
+        List<Object> params = new ArrayList<>();
+        if (hasBranch) params.add(branch);
+        if (q != null && !q.isBlank()) {
+            sql = "SELECT mi.id, mi.method_name, mi.method_signature, mi.return_type " +
+                  "FROM method_info mi " + joinClause + " " +
+                  "WHERE mi.class_id = ? AND mi.method_name LIKE ? " +
+                  versionClause + " " +
+                  "ORDER BY mi.method_name LIMIT 100";
+            params.add(classId);
+            params.add(like(q));
+        } else {
+            sql = "SELECT mi.id, mi.method_name, mi.method_signature, mi.return_type " +
+                  "FROM method_info mi " + joinClause + " " +
+                  "WHERE mi.class_id = ? " +
+                  versionClause + " " +
+                  "ORDER BY mi.method_name LIMIT 200";
+            params.add(classId);
+        }
+        if (versioned) params.add(commitId);
+        return Result.success(jdbc.queryForList(sql, params.toArray()));
+    }
+
+    /**
+     * List API endpoint classes (classes annotated with @RestController or @Controller)
+     * for a project, optionally limited to those with a given annotation.
+     * Filters to HEAD version only.
+     */
+    @GetMapping("/endpoint-classes")
+    public Result<List<Map<String, Object>>> listEndpointClasses(
+            @RequestParam Long projectId,
+            @RequestParam(required = false) String q) {
+        String sql;
+        Object[] params;
+        String headFilter = "AND ci.is_head = 1 AND ai.is_head = 1";
+        if (q != null && !q.isBlank()) {
+            sql = "SELECT DISTINCT ci.id, ci.qualified_name, ci.simple_name, ci.class_type " +
+                  "FROM class_info ci " +
+                  "JOIN annotation_info ai ON ai.target_id = ci.id AND ai.target_type = 'CLASS' " +
+                  "WHERE ci.project_id = ? AND ai.annotation_name IN ('RestController','Controller') " +
+                  headFilter + " AND ci.qualified_name LIKE ? " +
+                  "ORDER BY ci.qualified_name LIMIT 100";
+            params = new Object[]{projectId, like(q)};
+        } else {
+            sql = "SELECT DISTINCT ci.id, ci.qualified_name, ci.simple_name, ci.class_type " +
+                  "FROM class_info ci " +
+                  "JOIN annotation_info ai ON ai.target_id = ci.id AND ai.target_type = 'CLASS' " +
+                  "WHERE ci.project_id = ? AND ai.annotation_name IN ('RestController','Controller') " +
+                  headFilter + " " +
+                  "ORDER BY ci.qualified_name LIMIT 200";
+            params = new Object[]{projectId};
+        }
+        return Result.success(jdbc.queryForList(sql, params));
+    }
+
+    /**
+     * List endpoint methods (methods annotated with @XxxMapping) in a class.
+     * Filters to HEAD version only.
+     */
+    @GetMapping("/endpoint-methods")
+    public Result<List<Map<String, Object>>> listEndpointMethods(
+            @RequestParam Long classId,
+            @RequestParam(required = false) String q) {
+        String sql;
+        Object[] params;
+        String headFilter = "AND mi.is_head = 1 AND ai.is_head = 1";
+        if (q != null && !q.isBlank()) {
+            sql = "SELECT DISTINCT mi.id, mi.method_name, mi.method_signature, mi.return_type " +
+                  "FROM method_info mi " +
+                  "JOIN annotation_info ai ON ai.target_id = mi.id AND ai.target_type = 'METHOD' " +
+                  "WHERE mi.class_id = ? AND ai.annotation_name IN ('GetMapping','PostMapping','PutMapping','DeleteMapping','RequestMapping') " +
+                  headFilter + " AND mi.method_name LIKE ? " +
+                  "ORDER BY mi.method_name LIMIT 100";
+            params = new Object[]{classId, like(q)};
+        } else {
+            sql = "SELECT DISTINCT mi.id, mi.method_name, mi.method_signature, mi.return_type " +
+                  "FROM method_info mi " +
+                  "JOIN annotation_info ai ON ai.target_id = mi.id AND ai.target_type = 'METHOD' " +
+                  "WHERE mi.class_id = ? AND ai.annotation_name IN ('GetMapping','PostMapping','PutMapping','DeleteMapping','RequestMapping') " +
+                  headFilter + " " +
+                  "ORDER BY mi.method_name LIMIT 200";
+            params = new Object[]{classId};
+        }
+        return Result.success(jdbc.queryForList(sql, params));
+    }
+
+    /**
+     * Lists business-entry classes, prioritizing HTTP API entry owners while also including
+     * scheduled jobs and listener-based entry methods.
+     * Filters to HEAD version only.
+     */
+    @GetMapping("/entry-classes")
+    public Result<List<Map<String, Object>>> listEntryClasses(
+            @RequestParam Long projectId,
+            @RequestParam(required = false) String q) {
+        String headFilter = "AND ci.is_head = 1 AND mi.is_head = 1 AND ai.is_head = 1";
+        String sql;
+        Object[] params;
+        if (q != null && !q.isBlank()) {
+            sql = "SELECT DISTINCT ci.id, ci.qualified_name, ci.simple_name, ci.class_type " +
+                  "FROM class_info ci " +
+                  "JOIN method_info mi ON mi.class_id = ci.id " +
+                  "JOIN annotation_info ai ON ai.target_id = mi.id AND ai.target_type = 'METHOD' " +
+                  "WHERE ci.project_id = ? AND ai.annotation_name IN (" + BUSINESS_ENTRY_ANNOTATION_SQL + ") " +
+                  headFilter + " AND ci.qualified_name LIKE ? " +
+                  "ORDER BY ci.qualified_name LIMIT 100";
+            params = new Object[]{projectId, like(q)};
+        } else {
+            sql = "SELECT DISTINCT ci.id, ci.qualified_name, ci.simple_name, ci.class_type " +
+                  "FROM class_info ci " +
+                  "JOIN method_info mi ON mi.class_id = ci.id " +
+                  "JOIN annotation_info ai ON ai.target_id = mi.id AND ai.target_type = 'METHOD' " +
+                  "WHERE ci.project_id = ? AND ai.annotation_name IN (" + BUSINESS_ENTRY_ANNOTATION_SQL + ") " +
+                  headFilter + " " +
+                  "ORDER BY ci.qualified_name LIMIT 200";
+            params = new Object[]{projectId};
+        }
+        return Result.success(jdbc.queryForList(sql, params));
+    }
+
+    /**
+     * Lists business-entry methods in a class.
+     * Filters to HEAD version only.
+     */
+    @GetMapping("/entry-methods")
+    public Result<List<Map<String, Object>>> listEntryMethods(
+            @RequestParam Long classId,
+            @RequestParam(required = false) String q) {
+        String headFilter = "AND mi.is_head = 1 AND ai.is_head = 1";
+        String sql;
+        Object[] params;
+        if (q != null && !q.isBlank()) {
+            sql = "SELECT DISTINCT mi.id, mi.method_name, mi.method_signature, mi.return_type " +
+                  "FROM method_info mi " +
+                  "JOIN annotation_info ai ON ai.target_id = mi.id AND ai.target_type = 'METHOD' " +
+                  "WHERE mi.class_id = ? AND ai.annotation_name IN (" + BUSINESS_ENTRY_ANNOTATION_SQL + ") " +
+                  headFilter + " AND mi.method_name LIKE ? " +
+                  "ORDER BY mi.method_name LIMIT 100";
+            params = new Object[]{classId, like(q)};
+        } else {
+            sql = "SELECT DISTINCT mi.id, mi.method_name, mi.method_signature, mi.return_type " +
+                  "FROM method_info mi " +
+                  "JOIN annotation_info ai ON ai.target_id = mi.id AND ai.target_type = 'METHOD' " +
+                  "WHERE mi.class_id = ? AND ai.annotation_name IN (" + BUSINESS_ENTRY_ANNOTATION_SQL + ") " +
+                  headFilter + " " +
+                  "ORDER BY mi.method_name LIMIT 200";
+            params = new Object[]{classId};
+        }
+        return Result.success(jdbc.queryForList(sql, params));
+    }
+
+    /** Quick class search across all projects. Filters to HEAD version. */
+    @GetMapping("/search")
+    public Result<List<Map<String, Object>>> searchClasses(
+            @RequestParam String q,
+            @RequestParam(required = false) Long projectId) {
+        String headFilter = "AND ci.is_head = 1";
+        String sql;
+        Object[] params;
+        if (projectId != null) {
+            sql = "SELECT ci.id AS class_id, ci.qualified_name, ci.simple_name, " +
+                  "ci.class_type, jp.project_name, jp.id AS project_id " +
+                  "FROM class_info ci JOIN analyzed_project jp ON ci.project_id = jp.id " +
+                  "WHERE ci.project_id = ? AND ci.qualified_name LIKE ? " + headFilter + " " +
+                  "ORDER BY ci.qualified_name LIMIT 50";
+            params = new Object[]{projectId, like(q)};
+        } else {
+            sql = "SELECT ci.id AS class_id, ci.qualified_name, ci.simple_name, " +
+                  "ci.class_type, jp.project_name, jp.id AS project_id " +
+                  "FROM class_info ci JOIN analyzed_project jp ON ci.project_id = jp.id " +
+                  "WHERE ci.qualified_name LIKE ? " + headFilter + " " +
+                  "ORDER BY ci.project_id, ci.qualified_name LIMIT 50";
+            params = new Object[]{like(q)};
+        }
+        return Result.success(jdbc.queryForList(sql, params));
+    }
+
+    /**
+     * 把用户输入转成 LIKE 的包含匹配参数，并转义通配符：
+     * 输入 {@code user_id} 时 {@code _} 不再匹配任意单个字符。MySQL 默认转义符为反斜杠。
+     */
+    static String like(String q) {
+        String escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        return "%" + escaped + "%";
+    }
+}

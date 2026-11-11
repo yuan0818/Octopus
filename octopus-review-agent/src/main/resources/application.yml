@@ -9,7 +9,7 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: ${OCTOPUS_DDL_AUTO:update}   # 生产环境建议 validate（表结构由迁移脚本管理）
     show-sql: false
     defer-datasource-initialization: true
     properties:

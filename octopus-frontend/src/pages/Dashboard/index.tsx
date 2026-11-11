@@ -17,6 +17,7 @@ import { useNavigate } from 'react-router-dom';
 import { repoApi } from '../../api/repos';
 import { analysisApi } from '../../api/analysis';
 import type { RepoConfig, AnalysisTask } from '../../types';
+import { palette } from '../../theme';
 
 const { Text } = Typography;
 
@@ -51,10 +52,10 @@ export default function Dashboard() {
   const failed = tasks.filter((t) => t.status === 'FAILED').length;
 
   const statCards = [
-    { title: '仓库总数', value: repos.length, icon: <DatabaseOutlined />, color: '#1677ff', bg: '#e6f4ff' },
-    { title: '运行中', value: running, icon: <ExperimentOutlined />, color: '#1677ff', bg: '#e6f4ff' },
-    { title: '已完成', value: completed, icon: <CheckCircleOutlined />, color: '#52c41a', bg: '#f6ffed' },
-    { title: '失败', value: failed, icon: <CloseCircleOutlined />, color: '#ff4d4f', bg: '#fff2f0' },
+    { title: '仓库总数', value: repos.length, icon: <DatabaseOutlined />, color: palette.primary, bg: palette.primaryBg },
+    { title: '运行中', value: running, icon: <ExperimentOutlined />, color: palette.primary, bg: palette.primaryBg },
+    { title: '已完成', value: completed, icon: <CheckCircleOutlined />, color: palette.success, bg: palette.successBg },
+    { title: '失败', value: failed, icon: <CloseCircleOutlined />, color: palette.error, bg: palette.errorBg },
   ];
 
   const taskColumns = [
@@ -101,10 +102,10 @@ export default function Dashboard() {
   ];
 
   const quickActions = [
-    { label: '管理仓库', desc: '添加 Git 仓库与凭证', icon: <DatabaseOutlined />, path: '/repos', color: '#1677ff', bg: '#e6f4ff' },
-    { label: '分析任务', desc: '按 Tag 触发代码分析', icon: <RocketOutlined />, path: '/analysis', color: '#722ed1', bg: '#f9f0ff' },
-    { label: '调用图查询', desc: '方法级调用链与影响面', icon: <CodeOutlined />, path: '/query/callgraph', color: '#13c2c2', bg: '#e6fffb' },
-    { label: 'Code Review', desc: '入口链路智能审查', icon: <CommentOutlined />, path: '/review', color: '#fa8c16', bg: '#fff7e6' },
+    { label: '管理仓库', desc: '添加 Git 仓库与凭证', icon: <DatabaseOutlined />, path: '/repos', color: palette.primary, bg: palette.primaryBg },
+    { label: '分析任务', desc: '按 Tag 触发代码分析', icon: <RocketOutlined />, path: '/analysis', color: palette.purple, bg: palette.purpleBg },
+    { label: '调用图查询', desc: '方法级调用链与影响面', icon: <CodeOutlined />, path: '/query/callgraph', color: palette.cyan, bg: palette.cyanBg },
+    { label: 'Code Review', desc: '入口链路智能审查', icon: <CommentOutlined />, path: '/review', color: palette.orange, bg: palette.warningBg },
   ];
 
   const isFirstTime = !loading && repos.length === 0;

@@ -1,0 +1,74 @@
+[
+  {
+    "operationId": "auth.login",
+    "revision": "v1",
+    "system": "account",
+    "service": "auth",
+    "method": "POST",
+    "path": "/login",
+    "inputs": {
+      "body": {
+        "location": "body",
+        "name": "$",
+        "type": "object",
+        "required": true,
+        "prefix": null
+      }
+    },
+    "requestSchema": {
+      "type": "object"
+    },
+    "responseSchema": {
+      "200": {
+        "type": "object"
+      }
+    },
+    "implementations": [],
+    "source": {
+      "kind": "MANUAL",
+      "location": "fixture",
+      "digest": "fixture"
+    },
+    "requiresCapabilities": [
+      "http",
+      "json"
+    ],
+    "securityProfile": null
+  },
+  {
+    "operationId": "auth.verify",
+    "revision": "v1",
+    "system": "account",
+    "service": "auth",
+    "method": "POST",
+    "path": "/verify",
+    "inputs": {
+      "token": {
+        "location": "header",
+        "name": "Authorization",
+        "type": "string",
+        "required": true,
+        "prefix": "Bearer "
+      }
+    },
+    "requestSchema": {
+      "type": "object"
+    },
+    "responseSchema": {
+      "200": {
+        "type": "object"
+      }
+    },
+    "implementations": [],
+    "source": {
+      "kind": "MANUAL",
+      "location": "fixture",
+      "digest": "fixture"
+    },
+    "requiresCapabilities": [
+      "http",
+      "json"
+    ],
+    "securityProfile": null
+  }
+]

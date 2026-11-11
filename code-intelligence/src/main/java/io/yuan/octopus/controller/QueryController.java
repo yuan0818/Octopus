@@ -8,6 +8,7 @@ import io.yuan.octopus.service.QueryService;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/query")
@@ -214,6 +215,22 @@ public class QueryController {
             @PathVariable Long projectId,
             @RequestParam String branch) {
         return Result.success(queryService.getAnalyzedCommits(projectId, branch));
+    }
+
+    /**
+     * 指定版本的入口链路全部成员及源码（git 优先）。
+     * 变更总结消费：两版本各取一份，完整链路源码交给 LLM 自行 diff。
+     */
+    @GetMapping("/entry-chain-source")
+    public Result<List<Map<String, Object>>> getEntryChainSource(
+            @RequestParam Long projectId,
+            @RequestParam String className,
+            @RequestParam String methodName,
+            @RequestParam String branch,
+            @RequestParam(required = false) String commitId,
+            @RequestParam(required = false) Integer maxDepth) {
+        return Result.success(pathQueryService.getEntryChainSource(
+                projectId, className, methodName, branch, commitId, maxDepth));
     }
 
     /**

@@ -12,11 +12,22 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
+      '/business-testing/api': {
+        target: process.env.SCENARIO_API_TARGET || 'http://localhost:8086',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/business-testing\/api/, '/api'),
+      },
       // Review-agent API calls — must use /review/api/ prefix so SPA routes like /review work
       '/review/api': {
         target: reviewTarget,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/review\/api/, '/api'),
+      },
+      // Scenario-runner
+      '/scenarios/api': {
+        target: process.env.SCENARIO_API_TARGET || 'http://localhost:8086',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/scenarios\/api/, '/api'),
       },
       // Generic /api → code-intelligence (MUST be last /api* rule)
       '/api': {

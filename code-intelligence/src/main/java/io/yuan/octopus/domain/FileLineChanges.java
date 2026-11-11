@@ -18,5 +18,10 @@ import java.util.List;
 public record FileLineChanges(String filePath,
                               String oldFilePath,
                               String changeType,
-                              List<int[]> changedLineRanges) {
+                              List<int[]> changedLineRanges,
+                              List<int[]> oldLineRanges) {
+    /** Compatibility for callers that only have new-side coordinates. */
+    public FileLineChanges(String filePath, String oldFilePath, String changeType, List<int[]> ranges) {
+        this(filePath, oldFilePath, changeType, ranges, List.of());
+    }
 }

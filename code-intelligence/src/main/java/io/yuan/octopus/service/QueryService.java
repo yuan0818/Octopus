@@ -13,6 +13,8 @@ import org.neo4j.driver.*;
 import org.neo4j.driver.Record;
 import org.neo4j.driver.types.Node;
 import org.neo4j.driver.types.Path;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -37,6 +39,15 @@ public class QueryService {
     );
 
     private final Driver neo4jDriver;
+
+    private static final Logger log = LoggerFactory.getLogger(QueryService.class);
+
+    /** BFS 每批 frontier 大小（控制 IN 列表长度）。 */
+    private static final int CALL_CHAIN_FRONTIER_BATCH = 1000;
+
+    /** 调用树输出节点上限（0 = 不限制），见 {@link #getCallChain}。字段注入以保持构造器签名不变。 */
+    @org.springframework.beans.factory.annotation.Value("${octopus.query.call-chain.max-tree-nodes:200000}")
+    private int callChainMaxTreeNodes = 200_000;
     private final ClassInfoRepository classInfoRepository;
     private final MethodInfoRepository methodInfoRepository;
     private final FieldInfoRepository fieldInfoRepository;
@@ -47,6 +58,7 @@ public class QueryService {
     private final AnalyzedProjectRepository javaProjectRepository;
     private final GitService gitService;
     private final RepoConfigService repoConfigService;
+    private final RepositoryScopeService repositoryScopes;
     private final Gson gson = new Gson();
 
     /** branches/commits 列表缓存 TTL：这两个查询底层是远端 git fetch，开销大且变化不频繁。 */
@@ -66,7 +78,7 @@ public class QueryService {
                         ClassInterfaceRelationRepository classInterfaceRelationRepository,
                         AnalyzedProjectRepository javaProjectRepository,
                         GitService gitService,
-                        RepoConfigService repoConfigService) {
+                        RepoConfigService repoConfigService, RepositoryScopeService repositoryScopes) {
         this.neo4jDriver = neo4jDriver;
         this.classInfoRepository = classInfoRepository;
         this.methodInfoRepository = methodInfoRepository;
@@ -78,6 +90,7 @@ public class QueryService {
         this.javaProjectRepository = javaProjectRepository;
         this.gitService = gitService;
         this.repoConfigService = repoConfigService;
+        this.repositoryScopes = repositoryScopes;
     }
 
     // ==================== Neo4j Query Methods ====================
@@ -87,17 +100,14 @@ public class QueryService {
      * commitId 为空 → 取 HEAD（current=true 或缺失）；commitId 非空 → 精确匹配 commitId。
      */
     private String versionFilter(String nodeAlias, String commitId) {
-        if (commitId == null || commitId.isBlank()) {
-            return "coalesce(" + nodeAlias + ".current, true) = true";
-        }
-        return nodeAlias + ".commitId = $commitId";
+        return CypherVersionFilters.version(nodeAlias, commitId);
     }
 
     /**
      * 判断是否为版本化查询（commitId 非空）。
      */
     private boolean isVersioned(String commitId) {
-        return commitId != null && !commitId.isBlank();
+        return CypherVersionFilters.isVersioned(commitId);
     }
 
     /**
@@ -105,14 +115,11 @@ public class QueryService {
      * 非空时限定节点 branch 属性精确匹配。
      */
     private String branchFilter(String nodeAlias, String branch) {
-        if (branch == null || branch.isBlank()) {
-            return "true";
-        }
-        return nodeAlias + ".branch = $branch";
+        return CypherVersionFilters.branch(nodeAlias, branch);
     }
 
     private boolean hasBranch(String branch) {
-        return branch != null && !branch.isBlank();
+        return CypherVersionFilters.hasBranch(branch);
     }
 
     public List<MethodEdgeDTO> getCallers(String qualifiedClassName, String methodName,
@@ -173,82 +180,109 @@ public class QueryService {
         }
     }
 
+    /**
+     * 构建从指定方法出发的下游调用树（{@code maxDepth <= 0} 表示不限深度）。
+     * <p>
+     * <b>不限深度是刻意的设计</b>：变更影响分析要尽可能找全受影响的调用路径。
+     * 实现上不再用 {@code MATCH path = ...-[:CALLS*1..]->...} 让 Neo4j 列举每一条路径
+     * （路径数随分支数指数增长，每条都携带完整节点列表），而是按层 BFS 展开<b>可达子图</b>：
+     * 每个节点只展开一次，查询成本与受影响的节点/边数量成线性关系。返回给前端的仍是
+     * 完整的调用树（路径语义不变），树在 Java 侧由子图展开得到。
+     * <p>
+     * 兜底：调用树节点数超过 {@code octopus.query.call-chain.max-tree-nodes}（默认 200000，
+     * 0 = 不限制）时停止展开并在响应中标记 {@code truncated=true}，避免单个请求把服务内存耗尽。
+     */
     public CallChainDTO getCallChain(String qualifiedClassName, String methodName,
                                      List<String> paramTypes, int maxDepth,
                                      String branch, String commitId) {
-        // maxDepth <= 0 means unlimited depth
-        String depthSpec = maxDepth > 0 ? "1.." + maxDepth : "1..";
         // Exclude SPRING_DI edges: they represent class-level DI dependencies, not method invocations.
         // Including them would produce paths that terminate at virtual class nodes (not real methods),
         // making the result a mixed dependency graph rather than a pure directed method-call graph.
-        String nodeFilter = "(" + branchFilter("n", branch) + " AND " + versionFilter("n", commitId) + ")";
-        String cypher = String.format("""
-            MATCH path = (start:MethodNode)-[:CALLS*%s]->(end:MethodNode)
-            WHERE start.qualifiedClassName = $className AND start.methodName = $methodName
-              AND ALL(r IN relationships(path) WHERE r.callType <> 'SPRING_DI')
-              AND ALL(n IN nodes(path) WHERE %s)
-            RETURN path
-            """, depthSpec, nodeFilter);
+        String startFilter = "(" + branchFilter("s", branch) + " AND " + versionFilter("s", commitId) + ")";
+        String childFilter = "(" + branchFilter("c", branch) + " AND " + versionFilter("c", commitId) + ")";
+        String startCypher = String.format("""
+            MATCH (s:MethodNode)
+            WHERE s.qualifiedClassName = $className AND s.methodName = $methodName AND %s
+            RETURN s ORDER BY s.signature
+            """, startFilter);
+        String expandCypher = String.format("""
+            MATCH (p:MethodNode)-[r:CALLS]->(c:MethodNode)
+            WHERE elementId(p) IN $frontier
+              AND coalesce(r.callType, 'DIRECT') <> 'SPRING_DI'
+              AND %s
+            RETURN p.signature AS parentSig, r.callType AS callType, r.lineNumber AS lineNumber, c
+            """, childFilter);
+
+        Map<String, Object> baseParams = new HashMap<>();
+        if (isVersioned(commitId)) baseParams.put("commitId", commitId);
+        if (hasBranch(branch)) baseParams.put("branch", branch);
+
         try (Session session = neo4jDriver.session()) {
-            Map<String, Object> params = new HashMap<>();
-            params.put("className", qualifiedClassName);
-            params.put("methodName", methodName);
-            if (isVersioned(commitId)) params.put("commitId", commitId);
-            if (hasBranch(branch)) params.put("branch", branch);
-            Result result = session.run(cypher, params);
-
-            MethodNodeDTO root = null;
-            Map<String, List<CallChainNodeDTO>> childrenMap = new LinkedHashMap<>();
-
-            while (result.hasNext()) {
-                Record record = result.next();
-                Path path = record.get("path").asPath();
-
-                Node startNode = path.start();
-                if (root == null) {
-                    root = mapNodeToMethodNodeDTO(startNode);
-                }
-
-                // Build chain from path segments
-                for (Path.Segment segment : path) {
-                    Node startSeg = segment.start();
-                    Node endSeg = segment.end();
-                    String parentSig = startSeg.get("signature").asString();
-
-                    MethodNodeDTO childMethod = mapNodeToMethodNodeDTO(endSeg);
-                    String callType = segment.relationship().get("callType").isNull()
-                        ? "DIRECT" : segment.relationship().get("callType").asString();
-                    int lineNumber = segment.relationship().get("lineNumber").isNull()
-                        ? 0 : segment.relationship().get("lineNumber").asInt();
-
-                    // Deduplicate: use a Map keyed by (childSig + "|" + callType) per parent
-                    String childSig = childMethod.signature();
-                    String dedupKey = (childSig != null ? childSig : childMethod.methodName()) + "|" + callType;
-                    childrenMap.computeIfAbsent(parentSig, k -> new ArrayList<>());
-                    boolean alreadyPresent = childrenMap.get(parentSig).stream()
-                        .anyMatch(existing -> {
-                            String existSig = existing.method().signature();
-                            String existKey = (existSig != null ? existSig : existing.method().methodName()) + "|" + existing.callType();
-                            return existKey.equals(dedupKey);
-                        });
-                    if (!alreadyPresent) {
-                        CallChainNodeDTO childNode = new CallChainNodeDTO(childMethod, callType, lineNumber, new ArrayList<>());
-                        childrenMap.get(parentSig).add(childNode);
-                    }
-                }
-            }
-
-            if (root == null) {
-                // Return empty chain if no paths found
+            Map<String, Object> startParams = new HashMap<>(baseParams);
+            startParams.put("className", qualifiedClassName);
+            startParams.put("methodName", methodName);
+            List<Node> starts = session.run(startCypher, startParams).list(r -> r.get("s").asNode());
+            if (starts.isEmpty()) {
                 return new CallChainDTO(
                     new MethodNodeDTO(qualifiedClassName, methodName, paramTypes, null, null, null),
-                    List.of()
-                );
+                    List.of(), false);
             }
 
-            // Build tree from root signature
-            List<CallChainNodeDTO> chain = buildChainTree(root.signature(), childrenMap, new HashSet<>());
-            return new CallChainDTO(root, chain);
+            // BFS over the reachable subgraph; each node is expanded at most once.
+            Map<String, List<CallChainNodeDTO>> childrenMap = new LinkedHashMap<>();
+            Set<String> edgeKeys = new HashSet<>();
+            Set<String> expanded = new HashSet<>();
+            List<String> frontier = new ArrayList<>();
+            for (Node s : starts) {
+                if (expanded.add(s.elementId())) frontier.add(s.elementId());
+            }
+            int level = 0;
+            while (!frontier.isEmpty() && (maxDepth <= 0 || level < maxDepth)) {
+                List<String> next = new ArrayList<>();
+                for (int from = 0; from < frontier.size(); from += CALL_CHAIN_FRONTIER_BATCH) {
+                    Map<String, Object> params = new HashMap<>(baseParams);
+                    params.put("frontier", new ArrayList<>(frontier.subList(from,
+                            Math.min(from + CALL_CHAIN_FRONTIER_BATCH, frontier.size()))));
+                    Result result = session.run(expandCypher, params);
+                    while (result.hasNext()) {
+                        Record record = result.next();
+                        String parentSig = record.get("parentSig").asString();
+                        Node childNode = record.get("c").asNode();
+                        MethodNodeDTO childMethod = mapNodeToMethodNodeDTO(childNode);
+                        String callType = record.get("callType").isNull() ? "DIRECT" : record.get("callType").asString();
+                        int lineNumber = record.get("lineNumber").isNull() ? 0 : record.get("lineNumber").asInt();
+
+                        // Deduplicate per parent by (childSig, callType)
+                        String childSig = childMethod.signature();
+                        String dedupKey = parentSig + "\u0000"
+                                + (childSig != null ? childSig : childMethod.methodName()) + "|" + callType;
+                        if (edgeKeys.add(dedupKey)) {
+                            childrenMap.computeIfAbsent(parentSig, k -> new ArrayList<>())
+                                    .add(new CallChainNodeDTO(childMethod, callType, lineNumber, new ArrayList<>()));
+                        }
+                        if (expanded.add(childNode.elementId())) {
+                            next.add(childNode.elementId());
+                        }
+                    }
+                }
+                frontier = next;
+                level++;
+            }
+
+            // Root: first overload (by signature) that actually has callees, else the first match.
+            Node rootNode = starts.stream()
+                    .filter(s -> childrenMap.containsKey(s.get("signature").asString(null)))
+                    .findFirst().orElse(starts.get(0));
+            MethodNodeDTO root = mapNodeToMethodNodeDTO(rootNode);
+
+            int[] budget = { callChainMaxTreeNodes > 0 ? callChainMaxTreeNodes : Integer.MAX_VALUE };
+            List<CallChainNodeDTO> chain = buildChainTree(root.signature(), childrenMap, new HashSet<>(), budget);
+            boolean truncated = budget[0] < 0;
+            if (truncated) {
+                log.warn("call-chain for {}#{} truncated at {} tree nodes (octopus.query.call-chain.max-tree-nodes)",
+                        qualifiedClassName, methodName, callChainMaxTreeNodes);
+            }
+            return new CallChainDTO(root, chain, truncated);
         }
     }
 
@@ -322,22 +356,36 @@ public class QueryService {
         return new CallTraceDTO(anchor, upstream, downstream);
     }
 
+    /**
+     * 把子图展开成调用树（按路径去环：同一路径上不重复出现同一节点）。
+     * {@code budget[0]} 为剩余可输出节点数，耗尽后置为 -1 并停止展开。
+     */
     private List<CallChainNodeDTO> buildChainTree(String parentSignature,
                                                    Map<String, List<CallChainNodeDTO>> childrenMap,
-                                                   Set<String> visited) {
-        if (visited.contains(parentSignature)) {
+                                                   Set<String> visited,
+                                                   int[] budget) {
+        if (parentSignature == null || visited.contains(parentSignature)) {
             return List.of();
         }
         visited.add(parentSignature);
-
-        List<CallChainNodeDTO> children = childrenMap.getOrDefault(parentSignature, List.of());
-        List<CallChainNodeDTO> result = new ArrayList<>();
-        for (CallChainNodeDTO child : children) {
-            List<CallChainNodeDTO> grandChildren = buildChainTree(
-                child.method().signature(), childrenMap, new HashSet<>(visited));
-            result.add(new CallChainNodeDTO(child.method(), child.callType(), child.lineNumber(), grandChildren));
+        try {
+            List<CallChainNodeDTO> children = childrenMap.getOrDefault(parentSignature, List.of());
+            List<CallChainNodeDTO> result = new ArrayList<>();
+            for (CallChainNodeDTO child : children) {
+                if (budget[0] <= 0) {
+                    budget[0] = -1;
+                    break;
+                }
+                budget[0]--;
+                List<CallChainNodeDTO> grandChildren = buildChainTree(
+                    child.method().signature(), childrenMap, visited, budget);
+                result.add(new CallChainNodeDTO(child.method(), child.callType(), child.lineNumber(), grandChildren));
+            }
+            return result;
+        } finally {
+            // 回溯：visited 只表示"当前路径上的祖先"，与原实现逐路径拷贝集合的语义一致，但不再每层复制
+            visited.remove(parentSignature);
         }
-        return result;
     }
 
     private MethodNodeDTO mapNodeToMethodNodeDTO(Node node) {
@@ -562,6 +610,8 @@ public class QueryService {
     }
 
     public List<ProjectSummaryDTO> getProjects() {
+        Map<String, RepositoryScopeService.Scope> scopes = repositoryScopes.scopes().stream()
+                .collect(Collectors.toMap(RepositoryScopeService.Scope::key, s -> s));
         return javaProjectRepository.findAll().stream()
                 .map(p -> new ProjectSummaryDTO(
                         p.getId(),
@@ -572,7 +622,11 @@ public class QueryService {
                         p.getIsBackendProject(),
                         p.getIsApiService(),
                         p.getBuildTool() != null ? p.getBuildTool().name() : null,
-                        p.getJavaVersion() != null ? p.getJavaVersion().name() : null))
+                        p.getJavaVersion() != null ? p.getJavaVersion().name() : null,
+                        RepositoryScopeService.key(p),
+                        scopes.get(RepositoryScopeService.key(p)).name(),
+                        RepositoryScopeService.root(p),
+                        RepositoryScopeService.modulePath(p)))
                 .sorted(Comparator.comparing(ProjectSummaryDTO::projectName)
                         .thenComparing(p -> p.branch() != null ? p.branch() : ""))
                 .toList();
@@ -968,9 +1022,11 @@ public class QueryService {
         } else {
             // 无 projectId 的全表入口查询：版本化保留后全表行数持续增长，
             // 必须在 SQL 层过滤而不是 findAll 载入内存再筛
-            classes = versioned
-                    ? classInfoRepository.findByCommitId(commitId)
-                    : classInfoRepository.findByIsHeadTrue();
+            classes = hasBranch
+                    ? (versioned ? classInfoRepository.findByBranchAndCommitId(branch, commitId)
+                            : classInfoRepository.findByBranchAndIsHeadTrue(branch))
+                    : (versioned ? classInfoRepository.findByCommitId(commitId)
+                            : classInfoRepository.findByIsHeadTrue());
         }
         if (classes.isEmpty()) {
             return new EntryPointContext(Map.of(), Map.of(), Map.of(), Map.of(), List.of());
@@ -984,12 +1040,12 @@ public class QueryService {
                 .collect(Collectors.toMap(MethodInfo::getId, value -> value));
         List<Long> methodIds = methods.stream().map(MethodInfo::getId).toList();
 
-        Map<Long, String> classPrefixById = new HashMap<>();
+        Map<Long, List<String>> classPrefixById = new HashMap<>();
         if (!classIds.isEmpty()) {
             annotationInfoRepository.findByAnnotationNameInAndTargetTypeAndTargetIdIn(
                     List.of("RequestMapping"), "CLASS", classIds)
                     .forEach(annotation -> classPrefixById.put(
-                            annotation.getTargetId(), parseAnnotationPath(annotation.getAnnotationParams())));
+                            annotation.getTargetId(), annotationValues(annotation.getAnnotationParams(), "path", "value")));
         }
 
         Map<Long, AnalyzedProjectEntity> projectByClassId = new HashMap<>();
@@ -1034,19 +1090,29 @@ public class QueryService {
                     httpMethod = "*";
                 }
             }
-            String methodPath = parseAnnotationPath(annotation.getAnnotationParams());
-            String classPrefix = context.classPrefixById().getOrDefault(classInfo.getId(), "");
+            List<String> httpMethods = "RequestMapping".equals(annotation.getAnnotationName())
+                    ? annotationValues(annotation.getAnnotationParams(), "method").stream()
+                        .map(m -> m.isBlank() ? "*" : m.replace("RequestMethod.", "")).toList()
+                    : List.of(httpMethod);
+            for (String method : httpMethods) {
+            for (String methodPath : annotationValues(annotation.getAnnotationParams(), "path", "value")) {
+            for (String classPrefix : context.classPrefixById().getOrDefault(classInfo.getId(), List.of(""))) {
             String fullPath = combinePaths(classPrefix, methodPath);
             EntryPointDTO entryPoint = buildEntryPoint(
                     ENTRY_TYPE_HTTP_API,
-                    httpMethod + " " + (fullPath == null || fullPath.isBlank() ? "/" : fullPath),
+                    method + " " + (fullPath == null || fullPath.isBlank() ? "/" : fullPath),
                     fullPath == null || fullPath.isBlank() ? "/" : fullPath,
-                    httpMethod,
+                    method,
                     fullPath,
                     methodInfo,
                     classInfo,
                     context.projectByClassId().get(classInfo.getId()));
-            result.putIfAbsent(entryPointKey(entryPoint.signature(), entryPoint.entryType()), entryPoint);
+            result.putIfAbsent(entryPointKey(entryPoint.signature(), entryPoint.entryType())
+                    + ":" + entryPoint.projectId() + ":" + entryPoint.branch() + ":" + entryPoint.commitId()
+                    + ":" + method + ":" + fullPath, entryPoint);
+            }
+            }
+            }
         }
     }
 
@@ -1154,10 +1220,10 @@ public class QueryService {
                 ownerSimpleName,
                 ENTRY_TYPE_HTTP_API.equals(entryType) ? ownerSimpleName : null,
                 methodInfo.getMethodSignature(),
-                project != null ? project.getId() : null,
+                classInfo.getProjectId() != null ? classInfo.getProjectId() : project != null ? project.getId() : null,
                 project != null ? project.getProjectName() : null,
-                project != null ? project.getBranch() : null,
-                project != null ? project.getCommitId() : null
+                classInfo.getBranch() != null ? classInfo.getBranch() : project != null ? project.getBranch() : null,
+                classInfo.getCommitId() != null ? classInfo.getCommitId() : project != null ? project.getCommitId() : null
         );
     }
 
@@ -1264,6 +1330,28 @@ public class QueryService {
         return parseStringParam(params, null);
     }
 
+    /** Stored annotations contain either literal strings, Java array expressions, or JSON arrays. */
+    private List<String> annotationValues(String params, String... keys) {
+        if (params == null || params.isBlank()) return List.of("");
+        try {
+            var object = com.google.gson.JsonParser.parseString(params).getAsJsonObject();
+            for (String key : keys) {
+                var value = object.get(key);
+                if (value == null || value.isJsonNull()) continue;
+                if (value.isJsonArray()) return value.getAsJsonArray().asList().stream()
+                        .map(v -> v.getAsString().replaceAll("^\"|\"$", "")).toList();
+                String raw = value.getAsString().trim();
+                if (raw.startsWith("{")) raw = raw.substring(1, raw.length() - 1);
+                List<String> values = new ArrayList<>();
+                var matcher = java.util.regex.Pattern.compile("\"([^\"]*)\"").matcher(raw);
+                while (matcher.find()) values.add(matcher.group(1));
+                if (!values.isEmpty()) return values;
+                return Arrays.stream(raw.split(",")).map(String::trim).toList();
+            }
+        } catch (Exception ignored) { /* Legacy representation uses the existing scalar parser. */ }
+        return List.of("");
+    }
+
     /** Parses a string param from the stored annotation params JSON; keys is a
      *  set of alternative keys ("value"/"path" for paths), or a single key. */
     private String parseStringParam(String params, String key) {
@@ -1288,7 +1376,7 @@ public class QueryService {
             Map<Long, ClassInfo> classById,
             Map<Long, MethodInfo> methodById,
             Map<Long, AnalyzedProjectEntity> projectByClassId,
-            Map<Long, String> classPrefixById,
+            Map<Long, List<String>> classPrefixById,
             List<Long> methodIds
     ) {}
 }

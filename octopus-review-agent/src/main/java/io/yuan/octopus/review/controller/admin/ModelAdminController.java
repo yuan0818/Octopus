@@ -40,6 +40,8 @@ public class ModelAdminController {
 
     @PostMapping
     public Result<Void> registerModel(@RequestBody ModelConfig config) {
+        String invalid = normalizeStructuredOutput(config);
+        if (invalid != null) return Result.error(400, invalid);
         preserveExistingKeyIfUnchanged(null, config);
         modelRegistry.register(config);
         return Result.success(null);
@@ -48,9 +50,22 @@ public class ModelAdminController {
     @PutMapping("/{name}")
     public Result<Void> updateModel(@PathVariable String name, @RequestBody ModelConfig config) {
         config.setName(name);
+        String invalid = normalizeStructuredOutput(config);
+        if (invalid != null) return Result.error(400, invalid);
         preserveExistingKeyIfUnchanged(name, config);
         modelRegistry.register(config);
         return Result.success(null);
+    }
+
+    /** SO-002：规范结构化输出取值；不合法时返回说明（Anthropic 接口不能选 JSON 模式）。 */
+    static String normalizeStructuredOutput(ModelConfig config) {
+        try {
+            config.setStructuredOutput(io.yuan.octopus.review.model.StructuredOutputMode.normalize(
+                    config.getApiFormat(), config.getProvider(), config.getStructuredOutput()));
+            return null;
+        } catch (IllegalArgumentException e) {
+            return e.getMessage();
+        }
     }
 
     /** 编辑时密钥留空或保持掩码 → 沿用已存密钥（前端永不回显明文）。 */

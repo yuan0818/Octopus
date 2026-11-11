@@ -1,11 +1,11 @@
 -- ============================================================
 -- Default seed data for review-agent
--- Uses REPLACE INTO to ensure updates are applied
+-- Defaults are inserted once; user-edited prompts and skills survive restarts.
 -- ============================================================
 
 -- ── Prompt Templates ──
 
-REPLACE INTO agent_prompt (id, name, system_prompt, user_prompt, output_schema, created_at, updated_at) VALUES
+INSERT IGNORE INTO agent_prompt (id, name, system_prompt, user_prompt, output_schema, created_at, updated_at) VALUES
 ('review.code', 'Entry Chain Review',
 '# Skill: Entry Chain Review
 
@@ -205,7 +205,7 @@ Anchor: {{anchor}}
 ]',
 NOW(), NOW());
 
-REPLACE INTO agent_prompt (id, name, system_prompt, user_prompt, output_schema, created_at, updated_at) VALUES
+INSERT IGNORE INTO agent_prompt (id, name, system_prompt, user_prompt, output_schema, created_at, updated_at) VALUES
 ('review.security', '安全审查',
 '你是一个应用安全专家。基于 OWASP Top 10 和应用安全最佳实践审查代码，按代码实际使用的技术栈识别框架特有风险。
 
@@ -237,7 +237,7 @@ Anchor: {{anchor}}
 }',
 NOW(), NOW());
 
-REPLACE INTO agent_prompt (id, name, system_prompt, user_prompt, output_schema, created_at, updated_at) VALUES
+INSERT IGNORE INTO agent_prompt (id, name, system_prompt, user_prompt, output_schema, created_at, updated_at) VALUES
 ('extract.pattern', '模式提取',
 '你是一个软件架构分析师。从代码中提取可复用的项目级编码模式。
 
@@ -280,40 +280,40 @@ INSERT IGNORE INTO agent_skill (id, name, description, prompt_template_id, prefe
 
 -- ── 变更总结（链路版本对比 → 修改要点/测试要点）──
 
-REPLACE INTO agent_prompt (id, name, system_prompt, user_prompt, output_schema, created_at, updated_at) VALUES
+INSERT IGNORE INTO agent_prompt (id, name, system_prompt, user_prompt, output_schema, created_at, updated_at) VALUES
 ('summary.change', '变更总结',
-'你是变更影响分析助手。基于同一入口在两个版本之间的链路差异，总结修改要点和测试要点。
+'你是变更影响分析助手。你会拿到同一入口在两个版本（基准/目标）的【整条链路重建源码】。你的任务：
+1. 理解代码意图——这段链路在实现什么业务能力。
+2. 自行对两个版本的源码做 diff（逐方法对比，不要依赖服务端统计）。
+3. 总结修改要点：只描述两版本之间真实存在的行为差异（入参/校验/返回/状态流转/错误处理/依赖/并发），引用符号（类#方法）。
+4. 针对修改生成测试要点：每条测试场景必须针对某个修改，说明为什么需要测。
 
-## 规则
-- 修改要点：只总结与接口行为相关的变化（入参/校验/返回/状态流转/错误处理/外部依赖/并发），按影响分组，引用符号名（类#方法）并说明行为层面的差异，不要逐行复述代码。
-- 测试要点：从变更推导可执行的测试场景，覆盖新行为验证、回归点、边界条件、兼容性影响；每条给出为什么需要测的理由。
-- 只依据提供的链路差异（新增/移除/变更方法及双版本源码），不臆造差异之外的内容；源码语言以代码本身为准。
-- 新增/移除的方法要说明其对链路行为的影响，即使没有源码细节。
-- 如果差异信息不足以支撑某条结论，明确标注假设。
-
-## 输出格式
-必须输出 JSON（可放在 ```json 围栏内），不要输出其他解释性文字：
-{
-  "highlights": [{"title": "一句话要点", "detail": "行为层面的变化说明，引用符号"}],
-  "testPoints": [{"scenario": "可执行的测试场景", "reason": "为什么需要测"}]
-}
-没有值得关注的变更时输出空数组。',
+## 硬性规则
+- 两版本源码没有任何实质改动时，必须照实返回：highlights 与 testPoints 均为空数组，并在总结说明"无实质改动"。禁止编造、禁止过度解读。
+- 存取器/样板方法（get/set/is/equals/hashCode/toString/builder 等）的增删只代表数据类字段变化：按"某类新增/删除了某字段"汇总，不当作行为变更逐个展开。
+- 只依据提供的源码，不臆造未出现的机制（如加密、协议、鉴权）。
+- 服务端的成员统计仅供参考，与你自己的对比结论冲突时以你的对比为准。
+- 源码可能被按行重建，纯格式差异（缩进/换行/修饰符顺序）不是修改。',
 '## 变更总结任务
 入口: {{anchor}}
+版本对比: {{fromVersion}} → {{toVersion}}
 
-## 版本对比
-{{fromVersion}} → {{toVersion}}
+## 成员配对统计（参考）
+{{membership}}
 
-## 链路差异（git 源码对比）
-{{chainDiff}}
+## 基准版本（{{fromVersion}}）链路重建源码
+{{fromChainSource}}
 
-请总结修改要点和测试要点。',
+## 目标版本（{{toVersion}}）链路重建源码
+{{toChainSource}}
+
+请理解意图、对比两个版本源码，输出 JSON（无实质改动则两个数组均为空）。',
 '{
   "highlights": [{"title": "string", "detail": "string"}],
   "testPoints": [{"scenario": "string", "reason": "string"}]
 }',
 NOW(), NOW());
 
-REPLACE INTO agent_skill (id, name, description, prompt_template_id, preferred_provider, output_parser, max_tokens, enabled, created_at, updated_at) VALUES
+INSERT IGNORE INTO agent_skill (id, name, description, prompt_template_id, preferred_provider, output_parser, max_tokens, enabled, created_at, updated_at) VALUES
 ('change-summary', '变更总结', '同一入口跨版本（分支/commit/tag）对比，总结修改要点与测试要点',
 'summary.change', 'deepseek', 'change-summary', 32000, 1, NOW(), NOW());

@@ -22,7 +22,7 @@ public class ChatRequest {
     private String branch;
     private String commitId;
 
-    /** 模型路由：优先 modelName，回退 skill 的 preferredProvider。 */
+    /** 模型路由：优先 modelName，未选择时使用独立的可用模型配置。 */
     private String skillId;
     private String modelName;
 

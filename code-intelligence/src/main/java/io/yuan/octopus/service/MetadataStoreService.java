@@ -1,6 +1,7 @@
 package io.yuan.octopus.service;
 
 import com.google.gson.Gson;
+import io.yuan.octopus.common.SignatureNormalizer;
 import io.yuan.octopus.domain.*;
 import io.yuan.octopus.entity.*;
 import io.yuan.octopus.repository.*;
@@ -247,7 +248,7 @@ public class MetadataStoreService {
                             .classInfo(classInfo)
                             .commitId(commitId)
                             .isHead(true)
-                            .methodSignature(method.signature())
+                            .methodSignature(SignatureNormalizer.canonical(method.signature()))
                             .methodName(method.name())
                             .parameterTypes(toJson(method.parameterTypes()))
                             .returnType(method.returnType())

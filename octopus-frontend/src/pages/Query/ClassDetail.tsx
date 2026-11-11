@@ -1,9 +1,10 @@
+import { projectOptions } from '../../components/projectOptions';
 import { useState, useEffect } from 'react';
 import { Input, Button, Card, Descriptions, Table, Tag, Space, App, Typography, Empty, Select } from 'antd';
 import { SearchOutlined, CodeOutlined, BranchesOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
 import { queryApi } from '../../api/query';
-import { useBranchCommit } from '../../components/BranchCommitContext';
+import { useBranchCommit } from '../../components/branchCommitState';
 import BranchCommitInlineSelector from '../../components/BranchCommitInlineSelector';
 import type { ClassDetail as ClassDetailType } from '../../types';
 
@@ -76,10 +77,7 @@ export default function ClassDetail() {
             }}
             optionFilterProp="label"
             allowClear
-            options={projects.map((p) => ({
-              value: p.id,
-              label: `${p.projectName} [${p.branch ?? 'local'}]`,
-            }))}
+            options={projectOptions(projects)}
           />
           <BranchCommitInlineSelector
             projectId={selectedProjectId}

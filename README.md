@@ -52,12 +52,12 @@ Claude Code、Cursor、Codex 等 Agent 工具，以及 GitHub Code Navigation、
 |------|------|-----------------|
 | **只看到文件 diff** | 不知道修改会影响哪些入口、服务和下游依赖 | 以方法/函数为节点枚举 upstream、downstream 和完整 affected paths |
 | **语法级索引精度不足** | tree-sitter/ctags 系按名字匹配，重载、接口分派、多态调用不可分辨 | go/types、IntelliJ PSI 类型精确解析；接口分派按类型系统扇出 |
-| **测试范围靠经验判断** | 小改动可能漏测关键链路，大改动又容易过度回归 | 基于调用链影响路径缩小或扩大测试范围，并保留可解释证据 |
+| **测试范围靠经验判断** | 小改动可能漏测关键链路，大改动又容易过度回归 | **精准测试**：基于调用链影响路径圈定回归范围（受影响入口 = 回归用例集），并保留可解释证据 |
 | **框架隐式关系不可见** | DI、AOP、事件路由、异步调度等框架机制导致链路断裂 | Adapter 为各语言主流框架注册语义提取器 |
 | **LLM Review 缺少业务上下文** | 只审查局部 diff，难判断是否满足需求语义 | 将需求关联到链路后，按路径还原每一步源码供 LLM Review |
 | **版本演进难追溯** | 不同 tag/commit/分支的链路变化只能人工比对 | 按 branch/commit 维度保存图谱快照；链路成员+源码 git 对比，LLM 产出修改/测试要点 |
 
-**一句话：把代码变更转化为可查询、可解释、可审计的影响范围和源码证据。**
+**一句话：把代码变更转化为可查询、可解释、可审计的影响范围和源码证据——落地精准测试（基于变更影响面圈定回归范围）。**
 
 ---
 
@@ -125,6 +125,9 @@ Claude Code、Cursor、Codex 等 Agent 工具，以及 GitHub Code Navigation、
 | **octopus-code-reconstruct** | 调用路径源码还原（git blob 按行切片 + 批量坐标取源） | 8082 |
 | **octopus-review-agent** | AI Code Review（Skill 引擎/追问对话/变更总结/需求源 SPI） | 8083 |
 | **octopus-analysis-scheduler** | 定时/批量分析调度（RabbitMQ） | — |
+| **octopus-scenario-runner** | 场景化 API 测试（Tool Registry / Runner） | 8086 |
+| **octopus-jmeter-ext** | JMeter 扩展：前置数据准备与结果校验（DB/Redis/Kafka），由 scenario-runner 嵌入执行 | — |
+| **octopus-code-base** | 仓库配置与 Git 同步（与 code-intelligence 共享 `repo_config` 表，仅附加 nullable 列）；计划并入 code-intelligence | 8084 |
 | **octopus-infra/\*** | 共享基础设施（bom/common/mysql/neo4j/jgit/memory） | — |
 | **octopus-frontend** | React SPA | 3000 |
 
@@ -198,7 +201,7 @@ AnalysisDispatcher.detectAnalyzer(projectRoot)   （无构建文件目录回退 
 - **downstream** — 该方法继续影响哪些下游依赖
 - **affected paths** — 从上游到下游拼接后的完整链路
 
-用于确定哪些测试入口需要回归：API 端点、消息监听器、定时任务、服务根方法等。
+用于确定哪些测试入口需要回归：API 端点、消息监听器、定时任务、服务根方法等——这正是**精准测试**的核心：改了 X，就只回归调用到 X 的入口；配合变更总结生成的测试要点，直接产出回归用例清单。
 
 ### 4.3 源码还原 + LLM Review
 
@@ -305,11 +308,14 @@ curl -X POST "http://localhost:8080/api/analysis/1?tag=v1.0.0"
 docker compose up -d
 ```
 
-全容器模式：
+全容器模式（JVM 分析服务 + 后端 + 前端在容器内；MySQL/Neo4j/RabbitMQ、review-agent、reconstruct、scenario-runner 默认仍在宿主机，容器经 `host.docker.internal` 访问）：
 
 ```bash
+export OCTOPUS_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef   # 必填，缺失时 compose 直接报错
 docker compose -f docker-compose.yml -f docker-compose.jvm-analyzer.yml up -d
 ```
+
+依赖服务地址都可用环境变量覆盖：后端用 `MYSQL_HOST` / `NEO4J_URI` / `RABBITMQ_HOST` / `REVIEW_AGENT_URL` / `RECONSTRUCT_URL`，前端 nginx 用 `REVIEW_HOST` / `SCENARIO_HOST` / `RECONSTRUCT_HOST`。
 
 ### 关键环境变量
 
@@ -321,11 +327,18 @@ docker compose -f docker-compose.yml -f docker-compose.jvm-analyzer.yml up -d
 | `OCTOPUS_ENCRYPTION_KEY` | — | AES-GCM 加密密钥（Git 凭据 + review-agent 的模型 API Key 静态加密；需保持稳定，更换后已存密文无法解密） |
 | `OCTOPUS_GO_ROUTER_PKGS` | 内置默认 | Go 路由框架包白名单（逗号分隔，框架画像） |
 | `OCTOPUS_REPO_ROOT` | `/data/repos` | 仓库存储根——所有读仓库的服务（git/PSI/Go/reconstruct）统一同径挂载（单一写者=GitService，其余只读）；macOS 本地建议指向可写目录 |
+| `OCTOPUS_LOCAL_ALLOWED_ROOTS` | 空（不限制） | 本地分析目录白名单，逗号分隔；对外部署时建议设置 |
+| `OCTOPUS_ANALYSIS_MAX_CONCURRENT` | `2` | 同时执行的分析管线上限 |
+| `OCTOPUS_REGRESSION_CALLBACK_TOKEN` | 空 | code-intelligence 与 scenario-runner 共用的回调 token；设置后批量回归结果会回写 Gerrit |
+| `SCENARIO_RUNNER_URL` | `http://localhost:8086` | code-intelligence 访问 scenario-runner 的地址（发起批量回归） |
+| `OCTOPUS_DDL_AUTO` | `update` | Hibernate 建表策略；生产环境建议 `validate`，表结构由迁移脚本管理 |
 | `QUERY_SERVICE_URL` | `http://localhost:8080` | review-agent 访问 code-intelligence 的地址（变更总结取链路 diff） |
 
 ---
 
 ## 6. 关键设计权衡（Trade-offs）
+
+业务 API 测试支持项目/模块背景、测试环境和加密连接凭据，以及基于人工编排路径的 LLM 整链补全：一次启动后按节点状态自动推进，支持暂停、重试和统一应用步骤记忆。任务检查点加密持久化，页面刷新或服务中断后可恢复，并展示失败原因、处理建议和错误历史。也可单独补全当前步骤。使用方式、凭据规则和增量迁移见 [项目背景与 LLM Flow](octopus-scenario-runner/BUSINESS_CONTEXT.md)。
 
 架构文档记录结论，这里记录**为什么**——每个关键决策的另一面是什么、接受它换来了什么。
 
@@ -350,7 +363,6 @@ docker compose -f docker-compose.yml -f docker-compose.jvm-analyzer.yml up -d
 - **TypeScript / Python Adapter**：沿用 Go Adapter 的 Sidecar 模式（语言原生工具链 + HTTP 契约）；Python 将同时面对动态类型与框架装饰器两重挑战
 - **PSI 分析吞吐治理**：上游并发限流（分析任务入口排队）→ 实例池横向扩（每实例单飞互斥是 IntelliJ 平台硬约束）→ 已打开 project 缓存摊薄索引成本
 - **框架画像包（Framework Profile）**：JVM 侧的 Spring 语义抽取器扩展为可插拔画像（Quarkus/Micronaut 的 CDI 装配语义）；Go 侧已通过 `--routers` 白名单实现
-- **review-agent 数据访问收敛**：LookupController 的直读 MySQL 迁移为调用 code-intelligence API，消除跨服务 schema 耦合
 - **策略模式运行时链路还原**：对 `Map<String, Strategy>`、策略注册表、配置驱动路由等模式，消除静态候选边中的不可能路径
 - **Review Agent 可观测性**：审查 Session 的耗时分布、Token 消耗、Skill 执行链路追踪
 - **CI/CD 原生集成**：标准化的 GitHub Actions / GitLab CI 插件，提交即分析即反馈

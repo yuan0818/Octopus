@@ -1,0 +1,106 @@
+# Octopus CI：后端单元测试 + 依赖真实基础设施的上下文测试、Go 分析器、前端类型检查/lint/单测/构建。
+# jvm-project-analyzer（IntelliJ 插件，需下载约 1.1 GB IDEA）不在这里构建，避免拖慢每次提交。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (Java 21)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: octopus
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -uroot -proot --silent"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+      neo4j:
+        image: neo4j:5
+        env:
+          NEO4J_AUTH: neo4j/octpus123
+        ports: ["7687:7687"]
+        options: >-
+          --health-cmd="cypher-shell -u neo4j -p octpus123 'RETURN 1'"
+          --health-interval=15s --health-timeout=10s --health-retries=10
+      rabbitmq:
+        image: rabbitmq:3
+        ports: ["5672:5672"]
+        options: >-
+          --health-cmd="rabbitmq-diagnostics -q ping"
+          --health-interval=10s --health-timeout=10s --health-retries=10
+    env:
+      # application.yaml 中无默认值的变量（测试专用值）
+      GIT_PASSWORD: dummy
+      OCTOPUS_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test backend modules
+        run: >
+          ./gradlew --no-daemon
+          :octopus-infra:infra-common:test
+          :code-intelligence:test
+          :octopus-review-agent:test
+          :octopus-scenario-runner:test
+          :octopus-jmeter-ext:test
+          :octopus-code-reconstruct:test
+          :octopus-git:compileJava
+          :octopus-code-base:compileJava
+          :octopus-analysis-scheduler:compileJava
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-reports
+          path: "**/build/reports/tests/"
+
+  go-analyzer:
+    name: Go analyzer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: go-project-analyzer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-project-analyzer/go.mod
+      - run: go vet ./...
+      - run: go test ./...
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: octopus-frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: octopus-frontend/package-lock.json
+      - run: npm ci
+      # lint 为硬性门禁（0 error）。no-explicit-any / set-state-in-effect 暂为 warning（UI P2 清理），见 eslint.config.js。
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build

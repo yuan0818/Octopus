@@ -11,7 +11,7 @@ spring:
     local-repo-base: ${OCTOPUS_REPO_ROOT:/data/repos}
 
   datasource:
-    url: jdbc:mysql://localhost:3306/octopus?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:3306/octopus?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
     username: root
     password: ${MYSQL_PASSWORD:root}
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -22,7 +22,7 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: ${OCTOPUS_DDL_AUTO:update}   # 生产环境建议 validate（表结构由迁移脚本管理）
     show-sql: false
     properties:
       hibernate:
@@ -36,16 +36,24 @@ octopus:
   encryption:
     secret-key: ${OCTOPUS_ENCRYPTION_KEY}           # MUST be 16, 24, or 32 bytes for AES; change in production!
   neo4j:
-    uri: bolt://localhost:7687
+    uri: ${NEO4J_URI:bolt://localhost:7687}
     username: neo4j
     password: ${NEO4J_PASSWORD:octpus123}
+  analysis:
+    max-concurrent: ${OCTOPUS_ANALYSIS_MAX_CONCURRENT:2}      # 同时执行的分析管线上限，超出的任务排队等待
+    recover-on-startup: true                                  # 启动时把中断的 RUNNING 任务标记为可重试（单实例部署）
+    local:
+      allowed-roots: ${OCTOPUS_LOCAL_ALLOWED_ROOTS:}          # 本地分析目录白名单（逗号分隔）；留空 = 不限制
+  query:
+    call-chain:
+      max-tree-nodes: ${OCTOPUS_CALL_CHAIN_MAX_TREE_NODES:200000}  # 调用树输出节点兜底上限（0 = 不限制）；深度本身不设上限
   psi:
     timeout-seconds: 1500
     connect-retry-attempts: 3
     connect-retry-interval-seconds: 5
-    service-url: http://localhost:8377     # PSI HTTP service (runIde)
+    service-url: ${PSI_SERVICE_URL:http://localhost:8377}    # PSI HTTP service (runIde)
   go:
-    service-url: http://localhost:8378      # go-project-analyzer (run-go-analyzer-local.sh)
+    service-url: ${GO_SERVICE_URL:http://localhost:8378}     # go-project-analyzer (run-go-analyzer-local.sh)
     timeout-seconds: 600
     connect-retry-attempts: 3
     connect-retry-interval-seconds: 5
@@ -54,11 +62,11 @@ octopus:
     local-repo-ttl-days: 30
     local-repo-max-count: 50
     local-repo-max-size-gb: 100
-    service-url: http://localhost:8081     # git service runs in Docker, port-mapped to localhost:8081
+    service-url: ${GIT_SERVICE_URL:http://localhost:8081}    # git service runs in Docker, port-mapped to localhost:8081
   review-agent:
-    service-url: http://localhost:8083      # octopus-review-agent
+    service-url: ${REVIEW_AGENT_URL:http://localhost:8083}     # octopus-review-agent
   source-reconstruct:
-    url: http://localhost:8082              # octopus-code-reconstruct（git 源码读取）
+    url: ${RECONSTRUCT_URL:http://localhost:8082}             # octopus-code-reconstruct（git 源码读取）
   gerrit:
     webhook-token-header: X-Gerrit-Token
     octopus-base-url: http://localhost:8080  # for Gerrit comment detail links
@@ -67,6 +75,11 @@ octopus:
     comment-top-n: 10
     review-endpoint-timeout-seconds: 120
     default-skill-id: code-review
+    regression:                                   # Phase 1B：变更 → 业务回归 → 结果回写 Gerrit
+      scenario-url: ${SCENARIO_RUNNER_URL:http://localhost:8086}
+      environment: ${OCTOPUS_REGRESSION_ENVIRONMENT:test}
+      callback-token: ${OCTOPUS_REGRESSION_CALLBACK_TOKEN:}   # 与 scenario-runner 共用；留空则不回写 Gerrit
+      auto-trigger: false                          # true：审查完成即发起（仅当 patchset 有预览部署时适用）
 
 spring.rabbitmq:
   host: ${RABBITMQ_HOST:localhost}

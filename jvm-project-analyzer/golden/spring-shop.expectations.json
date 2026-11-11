@@ -1,0 +1,43 @@
+{
+  "project": "spring-shop",
+  "description": "PSI 抽取 golden 预期。method 使用 '全限定类名.方法名'（不含参数），与签名前缀匹配；status=required 失败即判定回归，status=known_gap 只报告（已知能力缺口，修复后改为 required）。",
+  "beans": [
+    {"className": "com.example.shop.OrderServiceImpl", "interfaceIncludes": "com.example.shop.OrderService", "status": "required"},
+    {"className": "com.example.shop.Notifier", "status": "required"},
+    {"className": "com.example.shop.OrderController", "status": "required"},
+    {"className": "com.example.shop.OrderEventListener", "status": "required"},
+    {"className": "com.example.shop.CleanupJob", "status": "required"},
+    {"className": "com.example.shop.AuditAspect", "status": "required"}
+  ],
+  "edges": [
+    {"caller": "com.example.shop.OrderController.create", "callee": "com.example.shop.OrderService.create", "status": "required",
+     "note": "通过接口调用；DI 解析后可能指向 OrderServiceImpl.create，两者任一即可", "calleeAlternatives": ["com.example.shop.OrderServiceImpl.create"]},
+    {"caller": "com.example.shop.OrderServiceImpl.create", "callee": "com.example.shop.Notifier.notifyAsync", "status": "required"},
+    {"caller": "com.example.shop.Notifier.notifyAsync", "callee": "com.example.shop.Notifier.format", "status": "required"},
+    {"caller": "com.example.shop.OrderEventListener.onCreated", "callee": "com.example.shop.OrderEventListener.audit", "status": "required"},
+    {"caller": "com.example.shop.CleanupJob.purge", "callee": "com.example.shop.OrderService.purgeCancelled", "status": "required",
+     "calleeAlternatives": ["com.example.shop.OrderServiceImpl.purgeCancelled"]},
+    {"caller": "com.example.shop.OrderController.<init>", "callee": "com.example.shop.OrderServiceImpl", "callType": "SPRING_DI", "status": "known_gap",
+     "note": "构造函数注入的 DI 边（签名格式待首轮运行后确认）"}
+  ],
+  "asyncBindings": [
+    {"asyncMethod": "com.example.shop.Notifier.notifyAsync", "callerIncludes": "com.example.shop.OrderServiceImpl.create", "status": "required"}
+  ],
+  "scheduledBindings": [
+    {"method": "com.example.shop.CleanupJob.purge", "cronExpression": "0 0 3 * * *", "status": "required"}
+  ],
+  "eventBindings": [
+    {"listener": "com.example.shop.OrderEventListener.onCreated", "eventType": "com.example.shop.OrderCreatedEvent", "status": "required",
+     "note": "无注解参数时由方法参数推导事件类型（本次已修复）"},
+    {"listener": "com.example.shop.OrderEventListener.onCreated", "publisherIncludes": "com.example.shop.OrderServiceImpl.create", "status": "known_gap",
+     "note": "EventExtractor 目前不识别 publishEvent 调用方，publisherMethodSignatures 恒为空"}
+  ],
+  "repositoryBindings": [
+    {"repository": "com.example.shop.OrderRepository", "domainClass": "com.example.shop.Order", "callerIncludes": "com.example.shop.OrderServiceImpl.create", "status": "required"}
+  ],
+  "aopBindings": [
+    {"aspectClass": "com.example.shop.AuditAspect", "adviceType": "BEFORE", "pointcutIncludes": "OrderServiceImpl.create", "status": "required"},
+    {"aspectClass": "com.example.shop.AuditAspect", "matchedIncludes": "com.example.shop.OrderServiceImpl.create", "status": "known_gap",
+     "note": "AOPExtractor 的 matchedMethodSignatures 恒为空，切点匹配目前在下游完成"}
+  ]
+}

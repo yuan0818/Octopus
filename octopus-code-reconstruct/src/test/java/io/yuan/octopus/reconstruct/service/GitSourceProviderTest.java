@@ -7,6 +7,22 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class GitSourceProviderTest {
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void treeUsesPinnedCommitAndExcludesWorkingFilesAndSymlinks(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        try(var git=org.eclipse.jgit.api.Git.init().setDirectory(dir.toFile()).call()) {
+            java.nio.file.Files.writeString(dir.resolve("Original.java"),"class Original {}");
+            java.nio.file.Files.createSymbolicLink(dir.resolve("shortcut.java"),java.nio.file.Path.of("outside.java"));git.add().addFilepattern(".").call();
+            var first=git.commit().setMessage("first").setAuthor("Test","test@example.invalid").call();
+            java.nio.file.Files.writeString(dir.resolve("Later.java"),"class Later {}");git.add().addFilepattern(".").call();git.commit().setMessage("later").setAuthor("Test","test@example.invalid").call();
+            java.nio.file.Files.writeString(dir.resolve("Untracked.java"),"class Untracked {}");
+            ((java.util.Map<Long,String>)org.springframework.test.util.ReflectionTestUtils.getField(provider,"repoPathCache")).put(1L,dir.toString());
+            ((java.util.Map<String,org.eclipse.jgit.lib.Repository>)org.springframework.test.util.ReflectionTestUtils.getField(provider,"repoCache")).put(dir.toString(),git.getRepository());
+            assertEquals(java.util.List.of("Original.java"),provider.tree(1L,first.name()));
+            assertThrows(IllegalArgumentException.class,()->provider.tree(1L,"HEAD"));
+        }
+    }
+
     private GitSourceProvider provider;
 
     @BeforeEach

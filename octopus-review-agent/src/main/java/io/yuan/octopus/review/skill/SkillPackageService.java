@@ -92,9 +92,17 @@ public class SkillPackageService {
             manifest.put("name", skill.getName());
             manifest.put("description", skill.getDescription());
             manifest.put("version", "1.0");
-            manifest.put("preferredProvider", skill.getPreferredProvider());
             manifest.put("maxTokens", skill.getMaxTokens());
+            Map<String, String> referenceTitles = new LinkedHashMap<>();
+            for (int i = 0; i < skill.getReferences().size(); i++) {
+                var reference = skill.getReferences().get(i);
+                String path = "references/ref-" + (i + 1) + ".md";
+                referenceTitles.put(path, reference.title());
+                addEntry(zos, path, reference.content());
+            }
+            manifest.put("referenceTitles", referenceTitles);
             addEntry(zos, "skill.json", gson.toJson(manifest));
+            addEntry(zos, "SKILL.md", skill.getInstructions());
 
             // prompts
             addEntry(zos, "prompts/system.prompt.md", prompt.systemPrompt());
@@ -130,7 +138,7 @@ public class SkillPackageService {
         String name = (String) manifest.getOrDefault("name", id);
         String description = (String) manifest.getOrDefault("description", "");
         String version = (String) manifest.getOrDefault("version", "1.0");
-        String provider = (String) manifest.getOrDefault("preferredProvider", "claude");
+        String provider = (String) manifest.get("preferredProvider");
         int maxTokens = manifest.get("maxTokens") instanceof Number n ? n.intValue() : 128000;
 
         // Extract prompts
@@ -150,6 +158,8 @@ public class SkillPackageService {
         for (var entry : entries.entrySet()) {
             if (entry.getKey().startsWith("references/") && entry.getKey().endsWith(".md")) {
                 String title = entry.getKey().replace("references/", "").replace(".md", "");
+                if (manifest.get("referenceTitles") instanceof Map<?, ?> titles && titles.get(entry.getKey()) instanceof String originalTitle)
+                    title = originalTitle;
                 String content = new String(entry.getValue(), StandardCharsets.UTF_8);
                 references.add(new SkillPackage.SkillReference(title, content, "markdown"));
             }
@@ -176,12 +186,14 @@ public class SkillPackageService {
         // Register the built-in prompts with a package-specific ID
         String promptId = "pkg:" + id;
         PromptTemplate promptTemplate = new PromptTemplate(promptId, name + " (built-in)",
-                buildSystemPrompt(systemPrompt, references, examples),
+                buildSystemPrompt(systemPrompt, List.of(), examples),
                 userPrompt, outputSchema != null ? outputSchema : "");
-        promptManager.register(promptTemplate);
+
 
         // Register the skill
-        Skill skill = new Skill(id, name, description, promptId, provider, "auto", maxTokens, true);
+        Skill skill = new Skill(id, name, description, promptId, provider, "auto", maxTokens, true,
+                getEntryContent(entries, "SKILL.md"), references);
+        promptManager.register(promptTemplate);
         skillRegistry.register(skill);
 
         log.info("Imported skill package: {} v{} ({} refs, {} examples)", id, version, references.size(), examples.size());
@@ -218,7 +230,7 @@ public class SkillPackageService {
 
     private void addEntry(ZipOutputStream zos, String name, String content) throws IOException {
         zos.putNextEntry(new ZipEntry(name));
-        zos.write(content.getBytes(StandardCharsets.UTF_8));
+        zos.write((content == null ? "" : content).getBytes(StandardCharsets.UTF_8));
         zos.closeEntry();
     }
 

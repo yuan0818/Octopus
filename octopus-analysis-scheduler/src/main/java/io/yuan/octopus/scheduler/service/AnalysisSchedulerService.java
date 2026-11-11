@@ -1,5 +1,6 @@
 package io.yuan.octopus.scheduler.service;
 
+import io.yuan.octopus.infra.common.mq.AnalysisTaskMessage;
 import io.yuan.octopus.scheduler.config.RabbitConfig;
 import io.yuan.octopus.scheduler.entity.AnalysisTask;
 import io.yuan.octopus.scheduler.repository.AnalysisTaskRepository;
@@ -45,16 +46,19 @@ public class AnalysisSchedulerService {
                 .build();
         task = taskRepository.save(task);
 
-        // 2. Route to queue by language
+        // 2. Route to queue by language；未知语言显式拒绝——静默错发到 JAVA
+        // 队列会让任务在错误的管线里失败，且无迹可查
         String queue = switch (task.getLanguage()) {
             case "JAVA" -> RabbitConfig.JAVA_QUEUE;
-            default -> RabbitConfig.JAVA_QUEUE;
+            case "GO" -> RabbitConfig.GO_QUEUE;
+            default -> throw new IllegalArgumentException(
+                    "Unsupported analysis language: " + task.getLanguage());
         };
         task.setQueueName(queue);
 
         // 3. Send to RabbitMQ（publish 失败时任务标记 FAILED，避免永久滞留 PENDING 无迹可查）
         try {
-            rabbitTemplate.convertAndSend(queue, queue, AnalysisTaskMessage.of(task));
+            rabbitTemplate.convertAndSend(queue, queue, toMessage(task));
             log.info("Task {} sent to queue {} (language={})", task.getId(), queue, task.getLanguage());
         } catch (Exception e) {
             log.error("Failed to publish task {} to queue {}: {}", task.getId(), queue, e.getMessage());
@@ -97,7 +101,7 @@ public class AnalysisSchedulerService {
 
         String queue = task.getQueueName() != null ? task.getQueueName() : RabbitConfig.JAVA_QUEUE;
         try {
-            rabbitTemplate.convertAndSend(queue, queue, AnalysisTaskMessage.of(task));
+            rabbitTemplate.convertAndSend(queue, queue, toMessage(task));
             log.info("Task {} re-dispatched to queue {}", task.getId(), queue);
         } catch (Exception e) {
             log.error("Failed to re-publish task {}: {}", task.getId(), e.getMessage());
@@ -108,20 +112,13 @@ public class AnalysisSchedulerService {
         return task;
     }
 
+    private AnalysisTaskMessage toMessage(AnalysisTask task) {
+        return new AnalysisTaskMessage(task.getId(), task.getRepoConfigId(), task.getProjectId(),
+                task.getBranch(), task.getCommitId(), task.getTag(), task.getLanguage(),
+                task.getAnalysisType(), java.time.LocalDateTime.now().toString());
+    }
+
     public record CreateTaskRequest(
             Long repoConfigId, Long projectId, String branch, String commitId,
             String tag, String language, String analysisType) {}
-
-    /** JSON 消息体：所有字段可空，字段名与原 Map 版本保持兼容。 */
-    public record AnalysisTaskMessage(
-            Long taskId, Long repoConfigId, Long projectId, String branch, String commitId,
-            String tag, String language, String analysisType, String timestamp) {
-
-        static AnalysisTaskMessage of(AnalysisTask task) {
-            return new AnalysisTaskMessage(
-                    task.getId(), task.getRepoConfigId(), task.getProjectId(), task.getBranch(),
-                    task.getCommitId(), task.getTag(), task.getLanguage(), task.getAnalysisType(),
-                    LocalDateTime.now().toString());
-        }
-    }
 }

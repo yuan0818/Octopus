@@ -26,7 +26,7 @@ public class EventExtractor {
                     PsiAnnotation ann = findAnnotation(method, EVENT_LISTENER);
                     if (ann == null) continue;
                     Map<String, Object> b = new LinkedHashMap<>();
-                    b.put("eventType", getEventType(ann));
+                    b.put("eventType", getEventType(ann, method));
                     b.put("publisherMethodSignatures", List.of());
                     b.put("listenerMethodSignatures",
                         List.of(CallGraphExtractor.buildSignature(psiClass, method)));
@@ -37,10 +37,13 @@ public class EventExtractor {
         return bindings;
     }
 
-    private String getEventType(PsiAnnotation ann) {
+    private String getEventType(PsiAnnotation ann, PsiMethod method) {
         PsiAnnotationMemberValue v = ann.findDeclaredAttributeValue("value");
         if (v == null) v = ann.findDeclaredAttributeValue("classes");
-        return v != null ? v.getText().replace("\"", "").trim() : "";
+        if (v != null) return v.getText().replace("\"", "").trim();
+        // 最常见的写法：@EventListener 不带参数，事件类型由第一个方法参数决定
+        var parameters = method.getParameterList().getParameters();
+        return parameters.length > 0 ? parameters[0].getType().getCanonicalText() : "";
     }
 
     private PsiAnnotation findAnnotation(PsiMethod method, String fqn) {

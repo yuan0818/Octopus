@@ -32,6 +32,17 @@ public class AgentSkill {
     @Column(name = "enabled")
     private boolean enabled = true;
 
+    @Column(name = "instructions", columnDefinition = "LONGTEXT")
+    private String instructions;
+
+    @Column(name = "references_json", columnDefinition = "LONGTEXT")
+    private String referencesJson;
+
+    public String getInstructions() { return instructions; }
+    public void setInstructions(String instructions) { this.instructions = instructions; }
+    public String getReferencesJson() { return referencesJson; }
+    public void setReferencesJson(String referencesJson) { this.referencesJson = referencesJson; }
+
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 

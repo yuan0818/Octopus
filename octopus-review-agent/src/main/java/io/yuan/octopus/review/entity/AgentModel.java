@@ -18,6 +18,10 @@ public class AgentModel {
     @Column(name = "api_format", length = 20)
     private String apiFormat;
 
+    /** 结构化输出：null（不启用）、json_object、json_schema；迁移脚本 20261028_agent_model_structured_output.sql。 */
+    @Column(name = "structured_output", length = 20)
+    private String structuredOutput;
+
     @Column(name = "model_id", nullable = false, length = 100)
     private String modelId;         // API model 参数
 
@@ -57,6 +61,8 @@ public class AgentModel {
 
     public String getApiFormat() { return apiFormat; }
     public void setApiFormat(String apiFormat) { this.apiFormat = apiFormat; }
+    public String getStructuredOutput() { return structuredOutput; }
+    public void setStructuredOutput(String structuredOutput) { this.structuredOutput = structuredOutput; }
     public String getModelId() { return modelId; }
     public void setModelId(String modelId) { this.modelId = modelId; }
     public String getApiUrl() { return apiUrl; }

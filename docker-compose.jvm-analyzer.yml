@@ -35,11 +35,27 @@ services:
     volumes:
       - ~/workspace:/workspace:ro
       - ${OCTOPUS_REPO_ROOT:-/data/repos}:${OCTOPUS_REPO_ROOT:-/data/repos}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # Linux 下解析宿主机（Docker Desktop 自带）
     environment:
       - SPRING_PROFILES_ACTIVE=docker
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-root}
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-octopus123}
+      # 与 docker-compose.infra.yml / application.yaml 一致（项目既定拼写 octpus123）
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-octpus123}
+      # 这两个变量在 application.yaml 中无默认值，缺失时 Spring 启动失败；
+      # 加密密钥缺失时 compose 直接报错提示，而不是让容器反复重启
+      - GIT_PASSWORD=${GIT_PASSWORD:-}
+      - OCTOPUS_ENCRYPTION_KEY=${OCTOPUS_ENCRYPTION_KEY:?请设置 OCTOPUS_ENCRYPTION_KEY（16/24/32 字节，所有服务需一致）}
+      # 容器内访问 PSI 走 compose 服务名；其余依赖默认在宿主机（见 application-docker.yml）
+      - PSI_SERVICE_URL=http://jvm-analyzer:8377
+      - RABBITMQ_HOST=${RABBITMQ_HOST:-host.docker.internal}
+      - REVIEW_AGENT_URL=${REVIEW_AGENT_URL:-http://host.docker.internal:8083}
+      - RECONSTRUCT_URL=${RECONSTRUCT_URL:-http://host.docker.internal:8082}
+      - SCENARIO_RUNNER_URL=${SCENARIO_RUNNER_URL:-http://host.docker.internal:8086}
+      - OCTOPUS_REGRESSION_CALLBACK_TOKEN=${OCTOPUS_REGRESSION_CALLBACK_TOKEN:-}
       - OCTOPUS_REPO_ROOT=${OCTOPUS_REPO_ROOT:-/data/repos}
+      # 容器内本地分析只允许挂载进来的目录
+      - OCTOPUS_LOCAL_ALLOWED_ROOTS=/workspace,${OCTOPUS_REPO_ROOT:-/data/repos}
       - OCTOPUS_PSI_HOST_WORKSPACE_ROOT=${HOME}/workspace
       - OCTOPUS_PSI_HOST_REPO_ROOT=${OCTOPUS_REPO_ROOT:-/data/repos}
     depends_on:
@@ -51,5 +67,9 @@ services:
   frontend:
     environment:
       - API_HOST=api:8080
+      # review-agent / scenario-runner / reconstruct 默认仍在宿主机运行
+      - REVIEW_HOST=${REVIEW_HOST:-host.docker.internal:8083}
+      - SCENARIO_HOST=${SCENARIO_HOST:-host.docker.internal:8086}
+      - RECONSTRUCT_HOST=${RECONSTRUCT_HOST:-host.docker.internal:8082}
     depends_on:
       - api

@@ -1,0 +1,61 @@
+server:
+  port: 8086
+
+spring:
+  application:
+    name: octopus-scenario-runner
+  datasource:
+    url: jdbc:mysql://localhost:3306/octopus?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=utf-8
+    username: root
+    password: ${MYSQL_PASSWORD:root}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jackson:
+    deserialization:
+      use-big-decimal-for-floats: true
+  servlet:
+    multipart:                                      # 扩展 JAR 上传上限（与 JarInspector.MAX_JAR_BYTES 一致）
+      max-file-size: 20MB
+      max-request-size: 21MB
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+
+scenario:
+  testing:
+    reviewer: ${BUSINESS_REVIEWER:}
+    artifact-dir: ${TEST_ARTIFACT_DIR:data/business-tests}
+    query-url: ${QUERY_SERVICE_URL:http://localhost:8080}
+    regression:                                     # Phase 1A：变更触发的批量回归
+      max-in-flight: 2                              # 全局同时排队/执行的回归运行数（执行服务共 2 进程、32 等待位）
+      max-items: 200                                # 单批次最多执行的受影响测试点
+      callback-allowed-prefixes: ${QUERY_SERVICE_URL:http://localhost:8080}   # 回调地址白名单（逗号分隔）
+      callback-token: ${OCTOPUS_REGRESSION_CALLBACK_TOKEN:}
+    review-url: ${REVIEW_AGENT_URL:http://localhost:8083}
+    run-lease:                                      # Phase 2.2：运行心跳与遗留运行回收（多实例安全）
+      heartbeat-seconds: 15
+      lease-seconds: 120
+    data-run:                                       # Phase 2.4：数据驱动执行
+      max-in-flight: 2
+    model:                                          # 一次请求内多轮模型调用（工具发现、格式／语义修正）的总时限
+      interactive-budget-seconds: 240               # 同步接口：必须小于前端 270 秒与 Nginx proxy_read_timeout 300 秒
+      background-budget-seconds: 900                # 后台整链补全的单节点时限
+    case-generation:                                # 三角色用例生成（G-Q1）：配置只能收紧，代码硬上限为 3 轮 / 30 次 / 2 次 / 1800 秒
+      max-rounds: 3
+      max-probes: 30
+      max-probes-per-intent: 2
+      task-timeout-seconds: 1800
+      probe-timeout-seconds: 300
+    probe-admins: ${OCTOPUS_PROBE_ADMINS:}          # 可开启“生成探测”环境授权的用户（逗号分隔）；为空时任何人都不能开启（G-Q4）
+    production-environment-pattern: "(?i)^(prod|production|prd|live)([-_].*)?$"   # 名称匹配的环境一律不能开启探测
+  jmeter:
+    home: ${JMETER_HOME:}
+    plugin-dir: data/jmeter-plugins
+  extensions:                                       # DSL I1：用户上传的 JMeter 扩展（发布时安装到 JMETER_HOME/lib/ext）
+    storage-dir: ${OCTOPUS_EXTENSION_DIR:data/jmeter-extensions}
+
+octopus:
+  neo4j:
+    uri: ${NEO4J_URI:bolt://localhost:7687}
+    username: ${NEO4J_USERNAME:neo4j}
+    password: ${NEO4J_PASSWORD:}

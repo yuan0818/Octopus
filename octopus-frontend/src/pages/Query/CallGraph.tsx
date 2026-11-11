@@ -1,5 +1,6 @@
+import { projectOptions } from '../../components/projectOptions';
 import { useState, useMemo, useCallback, useEffect } from 'react';
-import { Input, Button, Table, Tabs, App, Modal, Tag, Tooltip, InputNumber, Select, Card, Row, Col } from 'antd';
+import { Alert, Input, Button, Table, Tabs, App, Modal, Tag, Tooltip, InputNumber, Select, Card, Row, Col } from 'antd';
 import { SearchOutlined, ApartmentOutlined, SortAscendingOutlined, SortDescendingOutlined, NodeIndexOutlined, AimOutlined, FolderOpenOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -8,9 +9,10 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { queryApi } from '../../api/query';
-import { useBranchCommit } from '../../components/BranchCommitContext';
+import { useBranchCommit } from '../../components/branchCommitState';
 import BranchCommitInlineSelector from '../../components/BranchCommitInlineSelector';
 import type { CallEdge, CallChainResult, CallChainItem, CallTraceDTO, MethodNodeInfo, ClassSummary, EntryPointInfo, ProjectInfo } from '../../types';
+import { palette } from '../../theme';
 
 const NODE_W = 280, NODE_H = 68;
 
@@ -30,7 +32,7 @@ function extractPaths(root: MethodNodeInfo, chainList: CallChainItem[]): PathSte
       if (parentClass !== null && item.method.qualifiedClassName === parentClass && item.method.methodName === current[current.length-1].method.methodName) continue;
       current.push({ method: item.method, callType: item.callType });
       if (!item.children?.length) { allPaths.push([...current]); }
-      else { var beforeLen = allPaths.length; dfs(item.children, current); if (allPaths.length === beforeLen) allPaths.push([...current]); }
+      else { const beforeLen = allPaths.length; dfs(item.children, current); if (allPaths.length === beforeLen) allPaths.push([...current]); }
       current.pop();
     }
   }
@@ -46,20 +48,20 @@ function chainToFlow(root: MethodNodeInfo, chainList: CallChainItem[], onClassCl
       visited.add(id);
       const shortClass = m.qualifiedClassName.split('.').pop()!;
       nodes.push({ id, position: { x: 0, y: 0 }, data: { label: (
-        <div style={{ padding: '8px 12px', background: '#fff', border: '1px solid #d9d9d9', borderRadius: 6, fontSize: 12, lineHeight: 1.5, minWidth: 240 }}>
+        <div style={{ padding: '8px 12px', background: palette.bgContainer, border: `1px solid ${palette.border}`, borderRadius: 6, fontSize: 12, lineHeight: 1.5, minWidth: 240 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-            <span style={{ color: '#1677ff', cursor: 'pointer', fontWeight: 500 }} onClick={(e) => { e.stopPropagation(); onClassClick(m.qualifiedClassName); }}>{shortClass}</span>
-            <span style={{ color: '#333', fontWeight: 600 }}>#{m.methodName}</span>
+            <span style={{ color: palette.primary, cursor: 'pointer', fontWeight: 500 }} onClick={(e) => { e.stopPropagation(); onClassClick(m.qualifiedClassName); }}>{shortClass}</span>
+            <span style={{ color: palette.text, fontWeight: 600 }}>#{m.methodName}</span>
             <Tag color={callType === 'ROOT' ? 'green' : callType === 'INTERFACE' ? 'purple' : 'blue'} style={{ margin: 0, fontSize: 10, lineHeight: '16px' }}>{callType}</Tag>
-            {callType === 'INTERFACE' && <Tooltip title="查看实现类"><ApartmentOutlined style={{ color: '#52c41a', fontSize: 13, cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); onImplClick(m.qualifiedClassName, m.methodName); }} /></Tooltip>}
+            {callType === 'INTERFACE' && <Tooltip title="查看实现类"><ApartmentOutlined style={{ color: palette.success, fontSize: 13, cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); onImplClick(m.qualifiedClassName, m.methodName); }} /></Tooltip>}
           </div>
-          <div style={{ color: '#999', fontSize: 11 }}>{m.qualifiedClassName}{m.returnType && <span style={{ marginLeft: 6 }}>→ {m.returnType}</span>}</div>
+          <div style={{ color: palette.textTertiary, fontSize: 11 }}>{m.qualifiedClassName}{m.returnType && <span style={{ marginLeft: 6 }}>→ {m.returnType}</span>}</div>
         </div>
       )}, type: 'default' });
     }
     if (parentId) {
       const edgeId = `${parentId}->${id}`;
-      if (!edges.some(e => e.id === edgeId)) { edges.push({ id: edgeId, source: parentId, target: id, type: 'smoothstep', animated: false, markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 }, style: { stroke: '#91caff', strokeWidth: 1.5 } }); }
+      if (!edges.some(e => e.id === edgeId)) { edges.push({ id: edgeId, source: parentId, target: id, type: 'smoothstep', animated: false, markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 }, style: { stroke: palette.primaryBorder, strokeWidth: 1.5 } }); }
     }
     return id;
   }
@@ -181,7 +183,7 @@ export default function CallGraph() {
   const displayEdges = useMemo(() => {
     if (selectedPathIdx === null) return edges;
     const ids = pathEdgeIdSets[selectedPathIdx];
-    return edges.map(e => ({ ...e, animated: ids?.has(e.id) ?? false, style: { ...e.style, opacity: ids?.has(e.id) ? 1 : 0.08, stroke: ids?.has(e.id) ? '#1677ff' : '#91caff', strokeWidth: ids?.has(e.id) ? 2.5 : 1.5 } }));
+    return edges.map(e => ({ ...e, animated: ids?.has(e.id) ?? false, style: { ...e.style, opacity: ids?.has(e.id) ? 1 : 0.08, stroke: ids?.has(e.id) ? palette.primary : palette.primaryBorder, strokeWidth: ids?.has(e.id) ? 2.5 : 1.5 } }));
   }, [edges, selectedPathIdx, pathEdgeIdSets]);
 
   // ── Actions ──
@@ -236,14 +238,14 @@ export default function CallGraph() {
 
   // ── Tables ──
   const edgeColumns = [
-    { title: '类名', dataIndex: 'qualifiedClassName', ellipsis: true, width: 300, render: (name: string) => (<span style={{ color: '#1677ff', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => goToClass(name)}>{name}</span>) },
+    { title: '类名', dataIndex: 'qualifiedClassName', ellipsis: true, width: 300, render: (name: string) => (<span style={{ color: palette.primary, cursor: 'pointer', textDecoration: 'underline' }} onClick={() => goToClass(name)}>{name}</span>) },
     { title: '方法', dataIndex: 'methodName', width: 160 },
     { title: '调用类型', dataIndex: 'callType', width: 140, render: (t: string) => t === 'SPRING_DI' ? <Tag color="volcano">SPRING_DI 🔗</Tag> : <Tag color="blue">{t}</Tag> },
     { title: '行号', dataIndex: 'lineNumber', width: 70 },
     { title: '签名', dataIndex: 'signature', ellipsis: true },
   ];
   const implColumns = [
-    { title: '实现类', dataIndex: 'qualifiedName', ellipsis: true, render: (name: string, row: ClassSummary) => (<span style={{ color: '#1677ff', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => { setImplModalOpen(false); goToClass(name); }}>{row.simpleName}</span>) },
+    { title: '实现类', dataIndex: 'qualifiedName', ellipsis: true, render: (name: string, row: ClassSummary) => (<span style={{ color: palette.primary, cursor: 'pointer', textDecoration: 'underline' }} onClick={() => { setImplModalOpen(false); goToClass(name); }}>{row.simpleName}</span>) },
     { title: '全限定名', dataIndex: 'qualifiedName', ellipsis: true },
     { title: '类型', dataIndex: 'classType', width: 100, render: (t: string) => <Tag>{t}</Tag> },
     { title: '修饰符', dataIndex: 'modifiers', width: 120 },
@@ -258,7 +260,7 @@ export default function CallGraph() {
         <Row gutter={24}>
           {/* Mode A: Browse by Project/EntryPoint */}
           <Col span={12}>
-            <div style={{ fontWeight: 600, fontSize: 13, color: activeMode === 'browse' ? '#1677ff' : '#999', marginBottom: 8, cursor: 'pointer' }} onClick={() => setActiveMode('browse')}>
+            <div style={{ fontWeight: 600, fontSize: 13, color: activeMode === 'browse' ? palette.primary : palette.textTertiary, marginBottom: 8, cursor: 'pointer' }} onClick={() => setActiveMode('browse')}>
               <FolderOpenOutlined /> 按项目浏览入口（API 优先）
             </div>
             {activeMode === 'browse' && (
@@ -274,7 +276,7 @@ export default function CallGraph() {
                     }
                   }}
                   placeholder="选择项目"
-                  options={projects.map(p => ({ value: p.id, label: p.projectName }))} allowClear />
+                  options={projectOptions(projects)} allowClear />
                 <BranchCommitInlineSelector
                   projectId={selectedProjectId ?? null}
                   branch={branch}
@@ -284,14 +286,14 @@ export default function CallGraph() {
                   fallbackBranch={projects.find(p => p.id === selectedProjectId)?.branch}
                   fallbackCommitId={projects.find(p => p.id === selectedProjectId)?.commitId}
                 />
-                <span style={{ color: '#888', fontSize: 12 }}>{entryPoints.length} 个入口</span>
+                <span style={{ color: palette.textTertiary, fontSize: 12 }}>{entryPoints.length} 个入口</span>
               </div>
             )}
           </Col>
 
           {/* Mode B: Search by Method */}
           <Col span={12}>
-            <div style={{ fontWeight: 600, fontSize: 13, color: activeMode === 'search' ? '#1677ff' : '#999', marginBottom: 8, cursor: 'pointer' }} onClick={() => setActiveMode('search')}>
+            <div style={{ fontWeight: 600, fontSize: 13, color: activeMode === 'search' ? palette.primary : palette.textTertiary, marginBottom: 8, cursor: 'pointer' }} onClick={() => setActiveMode('search')}>
               <AimOutlined /> 按方法查询调用链
             </div>
             {activeMode === 'search' && (
@@ -313,25 +315,25 @@ export default function CallGraph() {
       {/* ── Browse mode: entry-point list ── */}
       {activeMode === 'browse' && (
         <Card size="small" styles={{ body: { padding: '8px 12px', maxHeight: 'calc(100vh - 260px)', overflow: 'auto' } }}>
-          {entryPointsLoading && <div style={{ color: '#999', padding: 16 }}>加载中...</div>}
-          {!entryPointsLoading && entryPoints.length === 0 && <div style={{ color: '#aaa', padding: 24, textAlign: 'center' }}>{selectedProjectId ? '该项目暂无入口' : '请选择项目'}</div>}
+          {entryPointsLoading && <div style={{ color: palette.textTertiary, padding: 16 }}>加载中...</div>}
+          {!entryPointsLoading && entryPoints.length === 0 && <div style={{ color: palette.textTertiary, padding: 24, textAlign: 'center' }}>{selectedProjectId ? '该项目暂无入口' : '请选择项目'}</div>}
           {[...entryPointsByOwner.entries()].map(([owner, eps]) => (
             <div key={owner} style={{ marginBottom: 12 }}>
-              <div style={{ fontWeight: 600, fontSize: 13, color: '#333', marginBottom: 4, padding: '4px 0', borderBottom: '1px solid #f0f0f0' }}>{owner}</div>
+              <div style={{ fontWeight: 600, fontSize: 13, color: palette.text, marginBottom: 4, padding: '4px 0', borderBottom: `1px solid ${palette.borderSubtle}` }}>{owner}</div>
               {eps.map((ep, i) => (
                 <div key={i} onClick={() => launchEntryPoint(ep)}
                   style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 8px', cursor: 'pointer', borderRadius: 4, marginBottom: 1, transition: 'background 0.15s' }}
-                  onMouseEnter={e => (e.currentTarget.style.background = '#f5f5f5')} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  onMouseEnter={e => (e.currentTarget.style.background = palette.bgHover)} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                   <Tag color={entryTypeColor[ep.entryType] ?? 'default'} style={{ minWidth: 108, textAlign: 'center', margin: 0 }}>{ep.entryType}</Tag>
                   {ep.entryType === 'HTTP_API' ? (
                     <>
                       <Tag color={httpMethodColor[ep.httpMethod ?? '*'] ?? 'default'} style={{ minWidth: 52, textAlign: 'center', margin: 0 }}>{ep.httpMethod ?? '*'}</Tag>
-                      <span style={{ color: '#1677ff', fontFamily: 'monospace', fontSize: 13 }}>{ep.path || '/'}</span>
+                      <span style={{ color: palette.primary, fontFamily: 'monospace', fontSize: 13 }}>{ep.path || '/'}</span>
                     </>
                   ) : (
-                    <span style={{ color: '#1677ff', fontFamily: 'monospace', fontSize: 13 }}>{ep.triggerLabel || ep.displayName}</span>
+                    <span style={{ color: palette.primary, fontFamily: 'monospace', fontSize: 13 }}>{ep.triggerLabel || ep.displayName}</span>
                   )}
-                  <span style={{ color: '#888', fontSize: 12 }}>→ {ep.methodName}</span>
+                  <span style={{ color: palette.textTertiary, fontSize: 12 }}>→ {ep.methodName}</span>
                 </div>
               ))}
             </div>
@@ -343,46 +345,53 @@ export default function CallGraph() {
       {activeMode === 'search' && hasResult && (
         <Tabs activeKey={resultTab} onChange={setResultTab} size="small" items={[
           { key: 'chain', label: `调用链${chain ? ` (${paths.length} 路径)` : ''}`, children: chain ? (
+            <>
+            {chain.truncated && (
+              <Alert type="warning" showIcon style={{ marginBottom: 8 }}
+                message="调用树超过服务端节点上限，结果已截断"
+                description="可指定最大深度后重新查询，或调大 octopus.query.call-chain.max-tree-nodes（0 = 不限制）。" />
+            )}
             <div style={{ display: 'flex', height: 'calc(100vh - 320px)', minHeight: 500, gap: 8 }}>
-              <div style={{ width: 280, flexShrink: 0, border: '1px solid #f0f0f0', borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                <div style={{ padding: '8px 10px', borderBottom: '1px solid #f0f0f0', flexShrink: 0 }}>
+              <div style={{ width: 280, flexShrink: 0, border: `1px solid ${palette.borderSubtle}`, borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ padding: '8px 10px', borderBottom: `1px solid ${palette.borderSubtle}`, flexShrink: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                     <span style={{ fontWeight: 600, fontSize: 13 }}>路径 ({filteredPaths.length}/{paths.length})</span>
                     {selectedPathIdx !== null && <Button size="small" type="link" style={{ padding: 0 }} onClick={() => setSelectedPathIdx(null)}>显示全部</Button>}
                   </div>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <span style={{ fontSize: 11, color: '#888', whiteSpace: 'nowrap' }}>最少步数</span>
+                    <span style={{ fontSize: 11, color: palette.textTertiary, whiteSpace: 'nowrap' }}>最少步数</span>
                     <InputNumber size="small" min={1} max={50} value={minDepth} onChange={(v) => { setMinDepth(v ?? 1); setSelectedPathIdx(null); }} style={{ width: 60 }} />
                     <Button size="small" icon={sortOrder === 'desc' ? <SortDescendingOutlined /> : <SortAscendingOutlined />} onClick={() => setSortOrder(s => s === 'desc' ? 'asc' : 'desc')}>{sortOrder === 'desc' ? '长→短' : '短→长'}</Button>
                   </div>
                 </div>
                 <div style={{ flex: 1, overflowY: 'auto' }}>
-                  {filteredPaths.length === 0 && <div style={{ padding: 16, color: '#aaa', fontSize: 12, textAlign: 'center' }}>无符合条件的路径</div>}
+                  {filteredPaths.length === 0 && <div style={{ padding: 16, color: palette.textTertiary, fontSize: 12, textAlign: 'center' }}>无符合条件的路径</div>}
                   {filteredPaths.map(({ path, origIdx }, viewIdx) => (
-                    <div key={origIdx} onClick={() => setSelectedPathIdx(origIdx === selectedPathIdx ? null : origIdx)} style={{ padding: '7px 10px', cursor: 'pointer', background: origIdx === selectedPathIdx ? '#e6f4ff' : 'transparent', borderLeft: `3px solid ${origIdx === selectedPathIdx ? '#1677ff' : 'transparent'}`, borderBottom: '1px solid #f5f5f5' }}>
-                      <div style={{ color: '#aaa', fontSize: 10, marginBottom: 3, display: 'flex', justifyContent: 'space-between' }}><span>路径 {viewIdx + 1}</span><span style={{ fontWeight: 600, color: path.length >= 5 ? '#d4380d' : path.length >= 3 ? '#fa8c16' : '#8c8c8c' }}>{path.length} 步</span></div>
+                    <div key={origIdx} onClick={() => setSelectedPathIdx(origIdx === selectedPathIdx ? null : origIdx)} style={{ padding: '7px 10px', cursor: 'pointer', background: origIdx === selectedPathIdx ? palette.primaryBg : 'transparent', borderLeft: `3px solid ${origIdx === selectedPathIdx ? palette.primary : 'transparent'}`, borderBottom: `1px solid ${palette.bgHover}` }}>
+                      <div style={{ color: palette.textTertiary, fontSize: 10, marginBottom: 3, display: 'flex', justifyContent: 'space-between' }}><span>路径 {viewIdx + 1}</span><span style={{ fontWeight: 600, color: path.length >= 5 ? palette.errorText : path.length >= 3 ? palette.orange : palette.textTertiary }}>{path.length} 步</span></div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 0', fontSize: 11, lineHeight: 1.5 }}>
-                        {path.map((step, si) => (<span key={si} style={{ display: 'flex', alignItems: 'center' }}><span style={{ color: si === 0 ? '#389e0d' : si === path.length - 1 ? '#d4380d' : '#1677ff', fontWeight: si === 0 || si === path.length - 1 ? 600 : 400, wordBreak: 'break-all' }}>{step.method.methodName}</span>{si < path.length - 1 && <span style={{ color: '#ccc', margin: '0 3px', flexShrink: 0 }}>→</span>}</span>))}
+                        {path.map((step, si) => (<span key={si} style={{ display: 'flex', alignItems: 'center' }}><span style={{ color: si === 0 ? palette.successText : si === path.length - 1 ? palette.errorText : palette.primary, fontWeight: si === 0 || si === path.length - 1 ? 600 : 400, wordBreak: 'break-all' }}>{step.method.methodName}</span>{si < path.length - 1 && <span style={{ color: palette.textQuaternary, margin: '0 3px', flexShrink: 0 }}>→</span>}</span>))}
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
-              <div style={{ flex: 1, border: '1px solid #f0f0f0', borderRadius: 8 }}>
+              <div style={{ flex: 1, border: `1px solid ${palette.borderSubtle}`, borderRadius: 8 }}>
                 <ReactFlow nodes={displayNodes} edges={displayEdges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} fitView fitViewOptions={{ padding: 0.3 }} attributionPosition="bottom-left" minZoom={0.1} maxZoom={2}>
                   <Background /><Controls /><MiniMap nodeStrokeWidth={3} pannable zoomable />
                 </ReactFlow>
               </div>
             </div>
-          ) : <div style={{ color: '#999' }}>点击"调用链"搜索</div> },
-          { key: 'reverse', label: `API 端点 (${reverseEndpoints.length})`, children: reverseEndpoints.length === 0 ? <div style={{ color: '#999', padding: 24, textAlign: 'center' }}>点击「查找端点」查看触发该方法的 API 端点</div> : (
+            </>
+          ) : <div style={{ color: palette.textTertiary }}>点击"调用链"搜索</div> },
+          { key: 'reverse', label: `API 端点 (${reverseEndpoints.length})`, children: reverseEndpoints.length === 0 ? <div style={{ color: palette.textTertiary, padding: 24, textAlign: 'center' }}>点击「查找端点」查看触发该方法的 API 端点</div> : (
             <div>
-              <div style={{ marginBottom: 12, color: '#666', fontSize: 13 }}>方法 <strong>{className}.{methodName}</strong> 被以下 {reverseEndpoints.length} 个 API 端点触发</div>
+              <div style={{ marginBottom: 12, color: palette.textSecondary, fontSize: 13 }}>方法 <strong>{className}.{methodName}</strong> 被以下 {reverseEndpoints.length} 个 API 端点触发</div>
               {reverseEndpoints.map((ep: any, i: number) => (
-                <div key={i} style={{ marginBottom: 6, padding: '8px 14px', background: '#fff', borderRadius: 6, border: '1px solid #f0f0f0', display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div key={i} style={{ marginBottom: 6, padding: '8px 14px', background: palette.bgContainer, borderRadius: 6, border: `1px solid ${palette.borderSubtle}`, display: 'flex', alignItems: 'center', gap: 12 }}>
                   <Tag color={httpMethodColor[ep.httpMethod] ?? 'default'} style={{ minWidth: 52, textAlign: 'center', margin: 0 }}>{ep.httpMethod}</Tag>
-                  <span style={{ fontFamily: 'monospace', color: '#1677ff', fontSize: 13 }}>{ep.path}</span>
-                  <span style={{ color: '#888' }}>→</span>
+                  <span style={{ fontFamily: 'monospace', color: palette.primary, fontSize: 13 }}>{ep.path}</span>
+                  <span style={{ color: palette.textTertiary }}>→</span>
                   <span style={{ fontWeight: 500 }}>{ep.className?.split('.').pop()}.{ep.methodName}</span>
                 </div>
               ))}
@@ -391,18 +400,18 @@ export default function CallGraph() {
           { key: 'callers', label: `调用者 (${callers.length})`, children: <Table rowKey={(r:any) => (r.signature || r.methodName) + "|" + r.qualifiedClassName + "|" + r.lineNumber} dataSource={callers} columns={edgeColumns} size="small" pagination={false} /> },
           { key: 'callees', label: `被调用者 (${callees.length})`, children: <Table rowKey={(r:any) => (r.signature || r.methodName) + "|" + r.qualifiedClassName + "|" + r.lineNumber} dataSource={callees} columns={edgeColumns} size="small" pagination={false} /> },
           { key: 'trace', label: `调用轨迹${trace ? ' (' + (trace.upstream.length + trace.downstream.length) + ')' : ''}`, children: trace ? (
-            <div><div style={{ marginBottom: 12, color: '#666', fontSize: 13 }}>方法 <strong>{trace.anchor.qualifiedClassName}.{trace.anchor.methodName}</strong> 的调用轨迹（深度={traceDepth}）</div>
+            <div><div style={{ marginBottom: 12, color: palette.textSecondary, fontSize: 13 }}>方法 <strong>{trace.anchor.qualifiedClassName}.{trace.anchor.methodName}</strong> 的调用轨迹（深度={traceDepth}）</div>
               <div style={{ display: 'flex', gap: 16 }}>
-                <div style={{ flex: 1 }}><h4 style={{ marginBottom: 8, color: '#1677ff' }}>上游调用者 ({trace.upstream.length})</h4><Table dataSource={trace.upstream} rowKey={(r:any)=>(r.signature||"")+"|"+r.qualifiedClassName+"|"+r.lineNumber} size="small" columns={edgeColumns} pagination={false} /></div>
-                <div style={{ flex: 1 }}><h4 style={{ marginBottom: 8, color: '#52c41a' }}>下游被调用者 ({trace.downstream.length})</h4><Table dataSource={trace.downstream} rowKey={(r:any)=>(r.signature||"")+"|"+r.qualifiedClassName+"|"+r.lineNumber} size="small" columns={edgeColumns} pagination={false} /></div>
+                <div style={{ flex: 1 }}><h4 style={{ marginBottom: 8, color: palette.primary }}>上游调用者 ({trace.upstream.length})</h4><Table dataSource={trace.upstream} rowKey={(r:any)=>(r.signature||"")+"|"+r.qualifiedClassName+"|"+r.lineNumber} size="small" columns={edgeColumns} pagination={false} /></div>
+                <div style={{ flex: 1 }}><h4 style={{ marginBottom: 8, color: palette.success }}>下游被调用者 ({trace.downstream.length})</h4><Table dataSource={trace.downstream} rowKey={(r:any)=>(r.signature||"")+"|"+r.qualifiedClassName+"|"+r.lineNumber} size="small" columns={edgeColumns} pagination={false} /></div>
               </div>
             </div>
-          ) : <div style={{ color: '#999', padding: 24, textAlign: 'center' }}>点击"轨迹"按钮查询</div> },
+          ) : <div style={{ color: palette.textTertiary, padding: 24, textAlign: 'center' }}>点击"轨迹"按钮查询</div> },
         ]} />
       )}
 
       {activeMode === 'search' && !hasResult && (
-        <div style={{ color: '#aaa', padding: 40, textAlign: 'center' }}>
+        <div style={{ color: palette.textTertiary, padding: 40, textAlign: 'center' }}>
           输入全限定类名和方法名，点击查询按钮查看调用链
         </div>
       )}

@@ -1,3 +1,4 @@
+import type { RepositoryScope, RepositoryVersion } from '../types';
 import http from './client';
 import reconstructHttp from './reconstructClient';
 import type {
@@ -66,6 +67,12 @@ export const queryApi = {
         ...(branch ? { branch } : {}),
         ...(commitId ? { commitId } : {}),
       },
+    }),
+
+  repositoryScopes: () => http.get<RepositoryScope[]>('/query/repository-scopes'),
+  repositoryVersions: (key: string, branch: string, projectIds?: number[]) =>
+    http.get<RepositoryVersion[]>('/query/repository-scopes/versions', {
+      params: { key, branch, ...(projectIds ? { projectIds: projectIds.join(',') } : {}) },
     }),
 
   projects: () =>

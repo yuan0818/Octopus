@@ -150,7 +150,10 @@ public class GoProjectAnalyzer implements ProjectAnalyzer {
 
         List<AnalyzedProjectEntity> entities = new ArrayList<>(projects.size());
         for (DiscoveredProject project : projects) {
-            entities.add(findOrCreateEntity(project, ctx));
+            var entity = findOrCreateEntity(project, ctx);
+            entity.setRepositoryRootPath(io.yuan.octopus.service.RepositoryIdentity.root(ctx.projectRoot().toString()));
+            analyzedProjectRepository.save(entity);
+            entities.add(entity);
         }
 
         // Workspace-wide analysis: the Go service resolves interfaces and

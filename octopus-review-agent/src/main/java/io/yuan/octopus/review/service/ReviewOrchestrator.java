@@ -154,7 +154,7 @@ public class ReviewOrchestrator {
         return new ReviewPreview(
                 skill.getId(),
                 skill.getName(),
-                skill.getPreferredProvider(),
+                resolveLLMConfig(request).getProvider(),
                 sourceCode.size(),
                 chainMetadata.get("totalSignatures") instanceof Number n ? n.intValue() : 0,
                 estimatedTokens,
@@ -177,21 +177,12 @@ public class ReviewOrchestrator {
             return new ReviewValidation(false, errors, warnings);
         }
 
-        // Check model availability
-        String provider = skill.getPreferredProvider();
-        ModelConfig modelConfig = modelRegistry.select(provider, "general");
-        if (modelConfig == null) {
-            errors.add("No model configured for provider '" + provider + "'. Register a model first.");
-        }
-
-        // Check API key
-        if (modelConfig != null) {
-            String apiKey = modelRegistry.getApiKey(provider);
-            if (apiKey == null || apiKey.isBlank()) {
-                errors.add("API key for '" + provider + "' is not configured.");
-            } else {
-                warnings.add("Using " + modelConfig.getModelId() + " via " + provider);
-            }
+        // Validation and execution must resolve the same selected configuration.
+        try {
+            LLMConfig config = resolveLLMConfig(request);
+            warnings.add("Using " + config.getModel() + " via " + config.getProvider());
+        } catch (IllegalArgumentException e) {
+            errors.add(e.getMessage());
         }
 
         // Check requirements / review mode
@@ -249,7 +240,7 @@ public class ReviewOrchestrator {
         log.info("[{}] Executing skill '{}' in {} mode ({} requirements, {} source classes)...",
                 sessionId, skill.getId(), reviewMode, requirements.size(), sourceCode.size());
 
-        LLMConfig llmConfig = resolveLLMConfig(request, skill);
+        LLMConfig llmConfig = resolveLLMConfig(request);
 
         SkillContext skillContext = new SkillContext(
                 pid, request.getClassName(), request.getMethodName(),
@@ -335,24 +326,20 @@ public class ReviewOrchestrator {
 
     // ── Resolve LLM config from DB ──
 
-    private LLMConfig resolveLLMConfig(ReviewRequest request, Skill skill) {
-        // If caller provided explicit llmConfig, use it as base
-        LLMConfig config = request.getLlmConfig() != null ? request.getLlmConfig() : new LLMConfig();
+    private LLMConfig resolveLLMConfig(ReviewRequest request) {
+        // Connection identity and credentials always come from the server-side registry.
+        LLMConfig overrides = request.getLlmConfig();
+        LLMConfig config = new LLMConfig();
 
         // Resolve model from DB by modelName
         ModelConfig modelConfig = null;
         if (request.getModelName() != null && !request.getModelName().isBlank()) {
             modelConfig = modelRegistry.get(request.getModelName());
             if (modelConfig == null) {
-                log.warn("Model '{}' not found in registry, falling back", request.getModelName());
+                throw new IllegalArgumentException("所选模型配置不存在：" + request.getModelName());
             }
-        }
-
-        // Fallback: resolve by skill's preferred provider
-        if (modelConfig == null && skill.getPreferredProvider() != null) {
-            modelConfig = modelRegistry.select(skill.getPreferredProvider(), "general");
-            if (modelConfig == null) {
-                modelConfig = modelRegistry.selectWithFallback(skill.getPreferredProvider());
+            if (!modelConfig.isEnabled()) {
+                throw new IllegalArgumentException("所选模型配置已禁用：" + request.getModelName());
             }
         }
 
@@ -373,11 +360,15 @@ public class ReviewOrchestrator {
         config.setModel(modelConfig.getModelId());
         config.setApiKey(modelConfig.getApiKey());
         config.setApiUrl(modelConfig.getApiUrl());
-        if (config.getMaxTokens() == null || config.getMaxTokens() <= 0) {
-            config.setMaxTokens(modelConfig.getMaxTokens());
+        config.setMaxTokens(overrides != null && overrides.getMaxTokens() != null && overrides.getMaxTokens() > 0
+                ? overrides.getMaxTokens() : modelConfig.getMaxTokens());
+        config.setTemperature(overrides != null && overrides.getTemperature() != null
+                ? overrides.getTemperature() : modelConfig.getTemperature());
+        if (overrides != null && overrides.getRequestTimeoutSeconds() != null) {
+            config.setRequestTimeoutSeconds(overrides.getRequestTimeoutSeconds());
         }
-        if (config.getTemperature() == null) {
-            config.setTemperature(modelConfig.getTemperature());
+        if (config.getApiKey() == null || config.getApiKey().isBlank()) {
+            throw new IllegalArgumentException("所选模型配置未设置 API Key：" + modelConfig.getName());
         }
 
         log.info("Resolved model: {} (provider={}, modelId={})", modelConfig.getName(), modelConfig.getProvider(), modelConfig.getModelId());

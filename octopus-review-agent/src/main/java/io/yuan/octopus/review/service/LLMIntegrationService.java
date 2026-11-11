@@ -77,4 +77,11 @@ public class LLMIntegrationService {
                 .findFirst()
                 .orElse(null);
     }
+
+    /** Workflow state machines own retries; one visible node attempt makes one provider call. */
+    public LLMResponse callOnce(String systemPrompt,String userPrompt,LLMConfig config) {
+        var adapter=findAdapter(config.getProvider());
+        if(adapter==null)throw new io.yuan.octopus.review.adapter.ModelCallException("MODEL_CONFIG",null);
+        return adapter.call(systemPrompt,userPrompt,config);
+    }
 }

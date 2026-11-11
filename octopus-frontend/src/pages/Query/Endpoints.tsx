@@ -1,8 +1,9 @@
+import { projectOptions } from '../../components/projectOptions';
 import { useEffect, useState, useCallback } from 'react';
 import { Select, Table, Tag, Typography, Space, Card, Empty } from 'antd';
 import { ApiOutlined } from '@ant-design/icons';
 import { queryApi } from '../../api/query';
-import { useBranchCommit } from '../../components/BranchCommitContext';
+import { useBranchCommit } from '../../components/branchCommitState';
 import BranchCommitInlineSelector from '../../components/BranchCommitInlineSelector';
 import type { EntryPointInfo, ProjectInfo } from '../../types';
 
@@ -125,10 +126,7 @@ export default function EndpointsPage() {
               loading={loadingProjects}
               onChange={handleProjectChange}
               optionFilterProp="label"
-              options={projects.map((p) => ({
-                value: p.id,
-                label: `${p.projectName} [${p.branch ?? 'local'}]`,
-              }))}
+              options={projectOptions(projects)}
             />
             <BranchCommitInlineSelector
               projectId={selectedProjectId}

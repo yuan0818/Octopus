@@ -124,6 +124,10 @@ public interface ClassInfoRepository extends JpaRepository<ClassInfo, Long> {
     /** 全表 HEAD 版本查询（跨校验/无 projectId 入口查询用，避免 findAll 载入历史版本行）。 */
     List<ClassInfo> findByIsHeadTrue();
 
+    List<ClassInfo> findByBranchAndIsHeadTrue(String branch);
+
+    List<ClassInfo> findByBranchAndCommitId(String branch, String commitId);
+
     /** 全表指定 commitId 版本查询。 */
     List<ClassInfo> findByCommitId(String commitId);
 

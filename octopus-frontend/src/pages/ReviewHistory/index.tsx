@@ -1,3 +1,4 @@
+import { projectOptions } from '../../components/projectOptions';
 import { useState, useEffect } from 'react';
 import {
   Card, Table, Tag, Space, Select, App, Typography, Drawer, Descriptions,
@@ -10,16 +11,14 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { reviewApi } from '../../api/review';
 import { queryApi } from '../../api/query';
-import { useBranchCommit } from '../../components/BranchCommitContext';
+import { useBranchCommit } from '../../components/branchCommitState';
 import BranchCommitInlineSelector from '../../components/BranchCommitInlineSelector';
 import type { ReviewResponse, RequirementCheck, CodeIssue } from '../../types';
+import { palette, severityColor } from '../../theme';
 
 const { Text, Paragraph, Title } = Typography;
 const { Panel } = Collapse;
 
-const severityColor: Record<string, string> = {
-  BLOCKER: '#ff4d4f', CRITICAL: '#ff7a45', WARNING: '#faad14', INFO: '#1677ff',
-};
 
 const statusColor: Record<string, string> = {
   COMPLETED: 'green', FAILED: 'red', PENDING: 'default', IN_PROGRESS: 'processing',
@@ -57,14 +56,14 @@ export default function ReviewHistoryPage() {
     if (!projectId) { setClasses([]); setSelectedClassId(undefined); setSelectedClassName(undefined); setMethods([]); setSelectedMethod(undefined); return; }
     reviewApi.listClasses(Number(projectId), undefined, branch, commitId).then(d => setClasses(Array.isArray(d) ? d : [])).catch(() => setClasses([]));
     setSelectedClassId(undefined); setSelectedClassName(undefined); setMethods([]); setSelectedMethod(undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [projectId, branch, commitId]);
 
   useEffect(() => {
     if (!selectedClassId) { setMethods([]); setSelectedMethod(undefined); return; }
     reviewApi.listMethods(selectedClassId, undefined, branch, commitId).then(d => setMethods(Array.isArray(d) ? d : [])).catch(() => setMethods([]));
     setSelectedMethod(undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [selectedClassId, branch, commitId]);
 
   const loadSessions = () => {
@@ -157,15 +156,15 @@ export default function ReviewHistoryPage() {
   };
 
   const renderCheck = (check: RequirementCheck) => (
-    <div key={check.requirementId} style={{ background: check.passed ? '#f6ffed' : '#fff2f0', borderRadius: 8, padding: '10px 14px', marginBottom: 8, border: `1px solid ${check.passed ? '#b7eb8f' : '#ffccc7'}` }}>
+    <div key={check.requirementId} style={{ background: check.passed ? palette.successBg : palette.errorBg, borderRadius: 8, padding: '10px 14px', marginBottom: 8, border: `1px solid ${check.passed ? palette.successBorder : palette.errorBorder}` }}>
       <Space>
-        {check.passed ? <CheckCircleOutlined style={{ color: '#52c41a' }} /> : <CloseCircleOutlined style={{ color: '#ff4d4f' }} />}
+        {check.passed ? <CheckCircleOutlined style={{ color: palette.success }} /> : <CloseCircleOutlined style={{ color: palette.error }} />}
         <Text strong>{check.requirementId}: {check.requirementTitle}</Text>
         <Tag color={check.confidence === 'HIGH' ? 'green' : check.confidence === 'MEDIUM' ? 'orange' : 'default'}>{check.confidence}</Tag>
       </Space>
-      <Paragraph style={{ margin: '6px 0 0', color: '#555' }}>{check.detail}</Paragraph>
+      <Paragraph style={{ margin: '6px 0 0', color: palette.textSecondary }}>{check.detail}</Paragraph>
       {check.highlightedCode && (
-        <pre style={{ margin: '6px 0', padding: '8px 12px', background: '#1e1e1e', color: '#d4d4d4', borderRadius: 6, fontSize: 12, lineHeight: 1.5, overflowX: 'auto', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+        <pre style={{ margin: '6px 0', padding: '8px 12px', background: palette.codeBg, color: palette.codeText, borderRadius: 6, fontSize: 12, lineHeight: 1.5, overflowX: 'auto', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
           <code>{check.highlightedCode}</code>
         </pre>
       )}
@@ -174,11 +173,11 @@ export default function ReviewHistoryPage() {
   );
 
   const renderIssue = (issue: CodeIssue) => (
-    <div key={issue.description} style={{ background: '#fff', borderRadius: 8, padding: '10px 14px', marginBottom: 8, border: `1px solid ${severityColor[issue.severity] || '#d9d9d9'}44` }}>
-      <Space><Badge color={severityColor[issue.severity] || '#999'} /><Tag color={severityColor[issue.severity] || 'default'}>{issue.severity}</Tag><Tag>{issue.category}</Tag></Space>
-      <Paragraph style={{ margin: '6px 0 0', color: '#333' }}>{issue.description}</Paragraph>
+    <div key={issue.description} style={{ background: palette.bgContainer, borderRadius: 8, padding: '10px 14px', marginBottom: 8, border: `1px solid ${severityColor[issue.severity] || palette.border}44` }}>
+      <Space><Badge color={severityColor[issue.severity] || palette.textTertiary} /><Tag color={severityColor[issue.severity] || 'default'}>{issue.severity}</Tag><Tag>{issue.category}</Tag></Space>
+      <Paragraph style={{ margin: '6px 0 0', color: palette.text }}>{issue.description}</Paragraph>
       {issue.highlightedCode && (
-        <pre style={{ margin: '6px 0', padding: '8px 12px', background: '#1e1e1e', color: '#d4d4d4', borderRadius: 6, fontSize: 12, lineHeight: 1.5, overflowX: 'auto', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+        <pre style={{ margin: '6px 0', padding: '8px 12px', background: palette.codeBg, color: palette.codeText, borderRadius: 6, fontSize: 12, lineHeight: 1.5, overflowX: 'auto', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
           <code>{issue.highlightedCode}</code>
         </pre>
       )}
@@ -206,7 +205,7 @@ export default function ReviewHistoryPage() {
             }}
             showSearch
             optionFilterProp="label"
-            options={projects.map(p => ({ value: String(p.id), label: `${p.projectName} [${p.branch || 'default'}]` }))}
+            options={projectOptions(projects).map(group => ({ ...group, options: group.options.map(option => ({ ...option, value: String(option.value) })) }))}
             allowClear
             onClear={() => setProjectId(undefined)}
           />
@@ -319,9 +318,9 @@ export default function ReviewHistoryPage() {
                 {detailReport.summary && (
                   <Row gutter={16} style={{ marginBottom: 16 }}>
                     <Col span={6}><Statistic title="总需求" value={detailReport.summary.totalRequirements} /></Col>
-                    <Col span={6}><Statistic title="通过" value={detailReport.summary.passed} valueStyle={{ color: '#52c41a' }} /></Col>
-                    <Col span={6}><Statistic title="失败" value={detailReport.summary.failed} valueStyle={{ color: '#ff4d4f' }} /></Col>
-                    <Col span={6}><Statistic title="待确认" value={detailReport.summary.uncertain} valueStyle={{ color: '#faad14' }} /></Col>
+                    <Col span={6}><Statistic title="通过" value={detailReport.summary.passed} valueStyle={{ color: palette.success }} /></Col>
+                    <Col span={6}><Statistic title="失败" value={detailReport.summary.failed} valueStyle={{ color: palette.error }} /></Col>
+                    <Col span={6}><Statistic title="待确认" value={detailReport.summary.uncertain} valueStyle={{ color: palette.warning }} /></Col>
                   </Row>
                 )}
 
@@ -341,7 +340,7 @@ export default function ReviewHistoryPage() {
                   </Collapse>
                 )}
 
-                <div style={{ fontSize: 12, color: '#999' }}>
+                <div style={{ fontSize: 12, color: palette.textTertiary }}>
                   <Space split={<Divider type="vertical" />}>
                     <span>涉及: {detailReport.involvedClasses} 类 / {detailReport.totalMethods} 方法</span>
                     {detailReport.truncated && <Tag color="orange">已截断</Tag>}
@@ -351,7 +350,7 @@ export default function ReviewHistoryPage() {
             )}
 
             {!detailReport && detailSession?.fullReport && (
-              <pre style={{ background: '#f5f5f5', padding: 12, borderRadius: 6, fontSize: 12, maxHeight: 400, overflow: 'auto' }}>
+              <pre style={{ background: palette.bgHover, padding: 12, borderRadius: 6, fontSize: 12, maxHeight: 400, overflow: 'auto' }}>
                 {typeof detailSession.fullReport === 'string' ? detailSession.fullReport : JSON.stringify(detailSession.fullReport, null, 2)}
               </pre>
             )}
@@ -365,11 +364,11 @@ export default function ReviewHistoryPage() {
                 <Divider />
                 <Title level={5}>审查发现 ({detailFindings.length})</Title>
                 {detailFindings.map((f: any, i: number) => (
-                  <div key={i} style={{ padding: '8px 12px', marginBottom: 6, background: '#fafafa', borderRadius: 6, border: '1px solid #f0f0f0' }}>
+                  <div key={i} style={{ padding: '8px 12px', marginBottom: 6, background: palette.bgSubtle, borderRadius: 6, border: `1px solid ${palette.borderSubtle}` }}>
                     <Space>
-                      {f.passed === true ? <CheckCircleOutlined style={{ color: '#52c41a' }} /> :
-                       f.passed === false ? <CloseCircleOutlined style={{ color: '#ff4d4f' }} /> :
-                       <InfoCircleOutlined style={{ color: '#999' }} />}
+                      {f.passed === true ? <CheckCircleOutlined style={{ color: palette.success }} /> :
+                       f.passed === false ? <CloseCircleOutlined style={{ color: palette.error }} /> :
+                       <InfoCircleOutlined style={{ color: palette.textTertiary }} />}
                       {f.severity && <Tag color={severityColor[f.severity] || 'default'}>{f.severity}</Tag>}
                       {f.category && <Tag>{f.category}</Tag>}
                     </Space>

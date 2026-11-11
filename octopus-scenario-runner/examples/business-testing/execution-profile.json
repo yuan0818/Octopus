@@ -1,0 +1,13 @@
+{
+  "services": {
+    "account.auth": {
+      "baseUrl": "http://127.0.0.1:8999"
+    }
+  },
+  "initialContext": {
+    "credentials": {
+      "user": "fixture"
+    }
+  },
+  "secretEnvironmentNames": {}
+}

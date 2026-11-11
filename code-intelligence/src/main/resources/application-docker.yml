@@ -1,13 +1,24 @@
+# 容器内运行 code-intelligence 时启用（SPRING_PROFILES_ACTIVE=docker）。
+# 默认假设依赖服务跑在宿主机：容器内用 host.docker.internal 访问
+# （Linux 需在 compose 中配置 extra_hosts: host.docker.internal:host-gateway）。
+# 每一项都可用环境变量覆盖，例如依赖服务也在 compose 网络内时设 RABBITMQ_HOST=rabbitmq。
 spring:
   datasource:
-    url: jdbc:mysql://host.docker.internal:3306/octopus?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    url: jdbc:mysql://${MYSQL_HOST:host.docker.internal}:3306/octopus?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+
+spring.rabbitmq:
+  host: ${RABBITMQ_HOST:host.docker.internal}
 
 octopus:
   neo4j:
-    uri: bolt://host.docker.internal:7687
+    uri: ${NEO4J_URI:bolt://host.docker.internal:7687}
   psi:
-    service-url: http://host.docker.internal:8377
+    service-url: ${PSI_SERVICE_URL:http://host.docker.internal:8377}
   go:
-    service-url: http://host.docker.internal:8378
+    service-url: ${GO_SERVICE_URL:http://host.docker.internal:8378}
   git:
-    service-url: http://git:8081
+    service-url: ${GIT_SERVICE_URL:http://git:8081}
+  review-agent:
+    service-url: ${REVIEW_AGENT_URL:http://host.docker.internal:8083}
+  source-reconstruct:
+    url: ${RECONSTRUCT_URL:http://host.docker.internal:8082}

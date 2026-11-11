@@ -1,6 +1,7 @@
 package io.yuan.octopus.service;
 
 import io.yuan.octopus.domain.CallEdge;
+import io.yuan.octopus.common.SignatureNormalizer;
 import io.yuan.octopus.domain.CallGraph;
 import io.yuan.octopus.domain.MethodNode;
 import io.yuan.octopus.exception.GraphStoreException;
@@ -120,8 +121,8 @@ public class GraphStoreService {
                             params.put("projectId", projectId);
                             params.put("branch", branch);
                             params.put("commitId", graphVersion);
-                            params.put("callerSignature", edge.caller().signature());
-                            params.put("calleeSignature", edge.callee().signature());
+                            params.put("callerSignature", SignatureNormalizer.canonical(edge.caller().signature()));
+                            params.put("calleeSignature", SignatureNormalizer.canonical(edge.callee().signature()));
                             params.put("callType", edge.callType().name());
                             params.put("lineNumber", edge.lineNumber());
                             return params;
@@ -317,7 +318,7 @@ public class GraphStoreService {
         params.put("projectId", projectId);
         params.put("branch", branch);
         params.put("commitId", commitId);
-        params.put("signature", node.signature());
+        params.put("signature", io.yuan.octopus.common.SignatureNormalizer.canonical(node.signature()));
         params.put("qualifiedClassName", node.qualifiedClassName());
         params.put("methodName", node.methodName());
         params.put("parameterTypes", node.parameterTypes().toArray(new String[0]));

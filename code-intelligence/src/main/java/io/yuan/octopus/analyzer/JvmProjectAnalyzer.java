@@ -128,6 +128,8 @@ public class JvmProjectAnalyzer implements ProjectAnalyzer {
 
         for (DiscoveredProject project : projects) {
             AnalyzedProjectEntity entity = findOrCreateEntity(project, ctx);
+            entity.setRepositoryRootPath(io.yuan.octopus.service.RepositoryIdentity.root(ctx.projectRoot().toString()));
+            javaProjectRepository.save(entity);
             ParseResult parseResult = codeParseService.parseProject(project, allSourceDirs);
             contexts.add(new ProjectContext(project, entity, parseResult));
         }

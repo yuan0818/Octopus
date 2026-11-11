@@ -157,8 +157,20 @@ public class SkillAdminController {
         Map<String, Object> chainMetadata = (Map<String, Object>) ctx.getOrDefault("chainMetadata",
                 new LinkedHashMap<>(Map.of("anchor", className + "." + methodName, "totalSignatures", 1)));
 
+        String modelName = (String) ctx.get("modelName");
+        var model = modelName != null && !modelName.isBlank() ? modelRegistry.get(modelName)
+                : modelRegistry.getAllConfigs().values().stream().filter(m -> m.isEnabled()).findFirst().orElse(null);
+        if (model == null || !model.isEnabled()) throw new IllegalArgumentException("请选择有效的模型配置");
+        var config = new io.yuan.octopus.review.dto.LLMConfig();
+        config.setProvider(model.getProvider());
+        config.setModel(model.getModelId());
+        config.setApiFormat(model.getApiFormat());
+        config.setApiUrl(model.getApiUrl());
+        config.setApiKey(model.getApiKey());
+        config.setMaxTokens(model.getMaxTokens());
+        config.setTemperature(model.getTemperature());
         return new SkillContext(
                 projectId, className, methodName, strategy,
-                requirements, "", chainMetadata, sourceCode, null);
+                requirements, "", chainMetadata, sourceCode, config);
     }
 }

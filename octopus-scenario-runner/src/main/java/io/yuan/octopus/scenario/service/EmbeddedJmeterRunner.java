@@ -1,0 +1,342 @@
+package io.yuan.octopus.scenario.service;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import org.apache.jmeter.config.Arguments;
+import org.apache.jmeter.threads.ThreadGroup;
+import org.apache.jmeter.engine.StandardJMeterEngine;
+import org.apache.jmeter.protocol.http.control.Header;
+import org.apache.jmeter.protocol.http.control.HeaderManager;
+import org.apache.jmeter.protocol.http.sampler.HTTPSamplerProxy;
+import org.apache.jmeter.reporters.ResultCollector;
+import org.apache.jmeter.reporters.Summariser;
+import org.apache.jmeter.samplers.SampleEvent;
+import org.apache.jmeter.samplers.SampleResult;
+import org.apache.jmeter.testelement.TestPlan;
+import org.apache.jmeter.util.JMeterUtils;
+import org.apache.jorphan.collections.HashTree;
+import org.apache.jorphan.collections.ListedHashTree;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import java.io.File;
+import java.util.*;
+
+/**
+ * 嵌入式 JMeter 执行器：使用 JMeter Java API 在进程内构建并执行测试计划。
+ * <p>
+ * 优势（对比进程调用）：
+ * <ul>
+ *   <li>无外部依赖（不需要安装 JMeter 二进制）</li>
+ *   <li>实时 SampleListener 回调（逐步骤进度，不是事后解析 JTL）</li>
+ *   <li>Java 异常直传（不解析 stderr）</li>
+ *   <li>单进程部署（运维简单）</li>
+ *   <li>变量注入通过 JMeterProperties（不通过命令行 -J）</li>
+ * </ul>
+ */
+@Component
+public class EmbeddedJmeterRunner {
+
+    private static final Logger log = LoggerFactory.getLogger(EmbeddedJmeterRunner.class);
+    private final Gson gson = new Gson();
+    private volatile boolean initialized = false;
+
+    public record StepResult(String label, boolean success, int responseCode, long elapsedMs,
+                             String responseData, Map<String, String> sentHeaders,
+                             String url, String failureMessage) {}
+
+    public record RunResult(boolean success, List<StepResult> steps, long totalMs, String error) {}
+
+    /**
+     * 进程内执行 IR。
+     *
+     * @param irJson   IR canonical JSON
+     * @param profile  环境档案（baseUrl / headers / 密钥引用）
+     * @param timeoutMs 执行超时
+     */
+    public RunResult run(String irJson, Map<String, Object> profile, long timeoutMs) {
+        initJMeter();
+        JsonObject ir = gson.fromJson(irJson, JsonObject.class);
+        JsonArray steps = ir.getAsJsonArray("steps");
+        if (steps == null || steps.size() == 0) {
+            return new RunResult(false, List.of(), 0, "IR 无步骤");
+        }
+
+        // 收集结果的 Listener（实时回调）
+        List<StepResult> results = Collections.synchronizedList(new ArrayList<>());
+        // 自定义 ResultCollector：直接实现监听逻辑
+        ResultCollector collector = new ResultCollector() {
+            @Override
+            public void sampleOccurred(SampleEvent event) {
+                SampleResult sr = event.getResult();
+                results.add(new StepResult(
+                        sr.getSampleLabel(),
+                        sr.isSuccessful(),
+                        sr.getResponseCode() != null && !sr.getResponseCode().isEmpty()
+                                ? Integer.parseInt(sr.getResponseCode()) : 0,
+                        sr.getTime(),
+                        sr.getResponseDataAsString(),
+                        Map.of(), // headers 从 SampleResult 提取较复杂，P2 补充
+                        sr.getUrlAsString(),
+                        sr.getResponseMessage()
+                ));
+            }
+        };
+
+        // 构建测试计划
+        HashTree testPlanTree = buildTestPlan(steps, profile, collector);
+
+        // 执行
+        StandardJMeterEngine engine = new StandardJMeterEngine();
+        long start = System.currentTimeMillis();
+        try {
+            engine.configure(testPlanTree);
+
+            // 在虚拟线程中执行并等待完成（或超时）
+            Thread runThread = Thread.ofVirtual().start(engine::run);
+            runThread.join(timeoutMs);
+            if (runThread.isAlive()) {
+                engine.stopTest();
+                return new RunResult(false, results, System.currentTimeMillis() - start,
+                        "执行超时（" + timeoutMs + "ms），已中止");
+            }
+        } catch (Exception e) {
+            log.error("JMeter 执行异常", e);
+            return new RunResult(false, results, System.currentTimeMillis() - start, e.getMessage());
+        }
+        long elapsed = System.currentTimeMillis() - start;
+
+        boolean allSuccess = results.stream().allMatch(StepResult::success);
+        return new RunResult(allSuccess, results, elapsed, null);
+    }
+
+    /* ═══ 测试计划构建 ═══ */
+
+    private ListedHashTree buildTestPlan(JsonArray steps, Map<String, Object> profile,
+                                    ResultCollector collector) {
+        // 设置 JMeter 属性（${baseUrl} 等变量的来源）
+        profile.forEach((k, v) -> JMeterUtils.getJMeterProperties().setProperty(k, String.valueOf(v)));
+
+        // TestPlan
+        TestPlan testPlan = new TestPlan("Octopus Scenario");
+        testPlan.setProperty(TestPlan.COMMENTS, "Generated by Octopus scenario-runner");
+        testPlan.setFunctionalMode(false);
+        testPlan.setTearDownOnShutdown(true);
+
+        ListedHashTree testPlanTree = new ListedHashTree();
+        ListedHashTree planHash = (ListedHashTree) testPlanTree.add(testPlan);
+
+        // Arguments（User Defined Variables）
+        if (profile != null && !profile.isEmpty()) {
+            Arguments args = new Arguments();
+            profile.forEach((k, v) -> args.addArgument(k, String.valueOf(v)));
+            planHash.add(args);
+        }
+
+        // ThreadGroup（单线程，失败即停止）
+        ThreadGroup threadGroup = new ThreadGroup();
+        threadGroup.setName("Scenario");
+        threadGroup.setNumThreads(1);
+        threadGroup.setRampUp(1);
+        threadGroup.setScheduler(false);
+        threadGroup.setProperty(ThreadGroup.ON_SAMPLE_ERROR, ThreadGroup.ON_SAMPLE_ERROR_STOPTHREAD);
+
+        HashTree threadGroupHash = planHash.add(threadGroup);
+
+        // 拓扑排序后的 Sampler 序列
+        List<JsonObject> ordered = topoSort(steps);
+        for (JsonObject step : ordered) {
+            JsonArray calls = step.has("calls") && step.get("calls").isJsonArray()
+                    ? step.getAsJsonArray("calls") : singleCall(step);
+            if (calls == null) continue;
+            String stepLabel = str(step, "label") != null ? str(step, "label") : step.get("id").getAsString();
+
+            for (JsonElement callEl : calls) {
+                JsonObject call = callEl.getAsJsonObject();
+                addSampler(threadGroupHash, stepLabel, call, profile);
+            }
+        }
+
+        // ResultCollector（挂在 TestPlan 层）
+        planHash.add(collector);
+
+        log.info("TestPlan built: {} threadGroup children, {} planHash children",
+                threadGroupHash.size(), planHash.size());
+
+        return testPlanTree;
+    }
+
+    private void addSampler(HashTree parent, String stepLabel, JsonObject call, Map<String, Object> profile) {
+        JsonObject request = call.getAsJsonObject("request");
+        String method = str(request, "method") != null ? str(request, "method") : "GET";
+        String path = str(request, "path") != null ? str(request, "path") : str(call, "api");
+        String domain = profile != null && profile.get("baseUrl") != null
+                ? stripScheme(String.valueOf(profile.get("baseUrl"))) : "httpbin.org";
+
+        HTTPSamplerProxy sampler = new HTTPSamplerProxy();
+        sampler.setName(stepLabel);
+        sampler.setDomain(domain);
+        sampler.setPath(path);
+        sampler.setMethod(method);
+        sampler.setFollowRedirects(true);
+        sampler.setUseKeepAlive(true);
+        sampler.setConnectTimeout("5000");
+        sampler.setResponseTimeout("30000");
+        sampler.setProperty("HTTPSampler.protocol", profile != null && String.valueOf(profile.get("baseUrl")).startsWith("https") ? "https" : "http");
+
+        // Body
+        if (request != null && request.has("body") && !request.get("body").isJsonNull()) {
+            Arguments args = new Arguments();
+            args.addArgument("", request.get("body").toString(), "=");
+            sampler.setArguments(args);
+        }
+
+        HashTree samplerHash = parent.add(sampler);
+
+        // pre[http.header] → HeaderManager
+        JsonArray pre = call.getAsJsonArray("pre");
+        if (pre != null && pre.size() > 0) {
+            HeaderManager headerManager = new HeaderManager();
+            boolean hasHeaders = false;
+            for (JsonElement p : pre) {
+                JsonObject pc = p.getAsJsonObject();
+                if ("http.header".equals(str(pc, "type"))) {
+                    JsonObject args = pc.getAsJsonObject("args");
+                    headerManager.add(new Header(str(args, "name"), str(args, "value")));
+                    hasHeaders = true;
+                }
+            }
+            if (hasHeaders) samplerHash.add(headerManager);
+        }
+
+        // extract → JSONPostProcessor
+        JsonArray extracts = call.getAsJsonArray("extract");
+        if (extracts != null) {
+            for (JsonElement e : extracts) {
+                JsonObject ex = e.getAsJsonObject();
+                org.apache.jmeter.extractor.json.jsonpath.JSONPostProcessor jsonpp =
+                        new org.apache.jmeter.extractor.json.jsonpath.JSONPostProcessor();
+                jsonpp.setName("Extract_" + str(ex, "as"));
+                jsonpp.setRefNames(str(ex, "as"));
+                jsonpp.setJsonPathExpressions(str(ex, "expr"));
+                jsonpp.setMatchNumbers("1");
+                jsonpp.setDefaultValues("__EXTRACT_FAILED__");
+                samplerHash.add(jsonpp);
+            }
+        }
+
+        // assert → ResponseAssertion
+        JsonArray asserts = call.getAsJsonArray("assert");
+        if (asserts != null) {
+            for (JsonElement e : asserts) {
+                JsonObject a = e.getAsJsonObject();
+                org.apache.jmeter.assertions.ResponseAssertion ra =
+                        new org.apache.jmeter.assertions.ResponseAssertion();
+                ra.setName("Assert_" + str(a, "path"));
+                String op = str(a, "op") != null ? str(a, "op") : "eq";
+                if ("notNull".equals(op)) {
+                    ra.setToContainsType();
+                } else {
+                    ra.setToEqualsType();
+                    String expected = str(a, "expected");
+                    if (expected != null) ra.addTestString(expected);
+                }
+                samplerHash.add(ra);
+            }
+        }
+    }
+
+    /* ═══ JMeter 初始化 ═══ */
+
+    private synchronized void initJMeter() {
+        if (initialized) return;
+        // 嵌入式模式：创建持久化 home 并写入最小 jmeter.properties
+        String jmeterHome = System.getProperty("jmeter.home", "data/jmeter-home");
+        File binDir = new File(jmeterHome, "bin");
+        binDir.mkdirs();
+        File propsFile = new File(binDir, "jmeter.properties");
+        if (!propsFile.exists()) {
+            try {
+                // 最小配置：禁用 GUI 相关、禁用日志、跳过 classfinder 扫描
+                java.nio.file.Files.writeString(propsFile.toPath(), """
+                        # Embedded JMeter minimal configuration
+                        jmeterengine.stopfail.system.exit=false
+                        jmeterengine.nongui.maxport=0
+                        log_level.jmeter=WARN
+                        log_level.jmeter.threads=WARN
+                        log_level.jmeter.protocol.http= WARN
+                        jmeter.save.saveservice.output_format=csv
+                        jmeter.save.saveservice.print_field_names=true
+                        saveservice_autoflush=true
+                        """);
+                log.info("Created minimal jmeter.properties at {}", propsFile);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to create jmeter.properties: " + e.getMessage(), e);
+            }
+        }
+        JMeterUtils.setJMeterHome(jmeterHome);
+        JMeterUtils.loadJMeterProperties(propsFile.getPath());
+        JMeterUtils.initLocale();
+        initialized = true;
+        log.info("JMeter initialized (embedded, home={})", jmeterHome);
+    }
+
+    /* ═══ 工具方法 ═══ */
+
+    private List<JsonObject> topoSort(JsonArray steps) {
+        Map<String, JsonObject> byId = new LinkedHashMap<>();
+        Map<String, List<String>> deps = new HashMap<>();
+        for (JsonElement el : steps) {
+            JsonObject s = el.getAsJsonObject();
+            String id = s.get("id").getAsString();
+            byId.put(id, s);
+            List<String> d = new ArrayList<>();
+            JsonArray depArr = s.getAsJsonArray("dependsOn");
+            if (depArr != null) for (JsonElement dEl : depArr) d.add(dEl.getAsString());
+            deps.put(id, d);
+        }
+        List<JsonObject> result = new ArrayList<>();
+        Set<String> visited = new HashSet<>();
+        Set<String> visiting = new HashSet<>();
+        for (String id : byId.keySet()) topoVisit(id, byId, deps, visited, visiting, result);
+        return result;
+    }
+
+    private void topoVisit(String id, Map<String, JsonObject> byId, Map<String, List<String>> deps,
+                          Set<String> visited, Set<String> visiting, List<JsonObject> result) {
+        if (visited.contains(id) || visiting.contains(id)) return;
+        visiting.add(id);
+        for (String dep : deps.getOrDefault(id, List.of())) topoVisit(dep, byId, deps, visited, visiting, result);
+        visiting.remove(id);
+        visited.add(id);
+        result.add(byId.get(id));
+    }
+
+    private JsonArray singleCall(JsonObject step) {
+        if (str(step, "api") == null) return null;
+        JsonObject call = new JsonObject();
+        call.addProperty("api", str(step, "api"));
+        if (step.has("request")) call.add("request", step.get("request"));
+        if (step.has("pre")) call.add("pre", step.get("pre"));
+        if (step.has("extract")) call.add("extract", step.get("extract"));
+        if (step.has("assert")) call.add("assert", step.get("assert"));
+        JsonArray arr = new JsonArray(); arr.add(call);
+        return arr;
+    }
+
+    private static String str(JsonObject o, String k) {
+        if (o == null || !o.has(k)) return null;
+        JsonElement e = o.get(k);
+        return e != null && !e.isJsonNull() ? e.getAsString() : null;
+    }
+
+    /** 从 URL 中提取域名（去掉 scheme 和尾部斜杠）。 */
+    private static String stripScheme(String url) {
+        if (url == null) return "";
+        String s = url.replaceFirst("^https?://", "");
+        return s.endsWith("/") ? s.substring(0, s.length() - 1) : s;
+    }
+}

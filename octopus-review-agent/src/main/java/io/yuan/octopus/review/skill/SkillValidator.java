@@ -1,6 +1,5 @@
 package io.yuan.octopus.review.skill;
 
-import io.yuan.octopus.review.model.ModelRegistry;
 import io.yuan.octopus.review.prompt.PromptManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,11 +18,9 @@ public class SkillValidator {
     private static final Logger log = LoggerFactory.getLogger(SkillValidator.class);
 
     private final PromptManager promptManager;
-    private final ModelRegistry modelRegistry;
 
-    public SkillValidator(PromptManager promptManager, ModelRegistry modelRegistry) {
+    public SkillValidator(PromptManager promptManager) {
         this.promptManager = promptManager;
-        this.modelRegistry = modelRegistry;
     }
 
     /**
@@ -42,28 +39,6 @@ public class SkillValidator {
                 promptManager.get(skill.getPromptTemplateId());
             } catch (IllegalArgumentException e) {
                 errors.add("Prompt template '" + skill.getPromptTemplateId() + "' not found");
-            }
-        }
-
-        // 2. Validate provider/model（仅提示字段：实际模型路由由 ReviewRequest.modelName
-        //    / ModelRegistry 决定，preferredProvider 不参与运行时路由）
-        if (skill.getPreferredProvider() == null || skill.getPreferredProvider().isBlank()) {
-            warnings.add("preferredProvider 未设置（可选的展示性提示字段）");
-        } else {
-            var model = modelRegistry.select(skill.getPreferredProvider(), "general");
-            if (model == null) {
-                warnings.add("No model registered for provider '" + skill.getPreferredProvider()
-                        + "'. Register one in Model Management.");
-            } else if (!model.isEnabled()) {
-                warnings.add("Model '" + model.getName() + "' is disabled.");
-            }
-        }
-
-        // 3. Validate API Key
-        if (skill.getPreferredProvider() != null) {
-            String apiKey = modelRegistry.getApiKey(skill.getPreferredProvider());
-            if (apiKey == null || apiKey.isBlank()) {
-                errors.add("API key for '" + skill.getPreferredProvider() + "' is not configured.");
             }
         }
 

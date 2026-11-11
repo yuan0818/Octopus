@@ -68,7 +68,9 @@ public class ReviewChatService {
 
         String userPrompt = buildUserPrompt(request, recent);
         LLMConfig config = resolveLLMConfig(request);
-        LLMResponse response = llmIntegrationService.call(systemPrompt(), userPrompt, config);
+        Skill skill = skillRegistry.resolve(request.getSkillId());
+        String system = skill == null ? systemPrompt() : skill.enrichSystemPrompt(systemPrompt());
+        LLMResponse response = llmIntegrationService.call(system, userPrompt, config);
 
         chatRepository.save(message(threadId, "USER", request.getQuestion()));
         chatRepository.save(message(threadId, "ASSISTANT", response.content()));
@@ -160,18 +162,13 @@ public class ReviewChatService {
         if (request.getModelName() != null && !request.getModelName().isBlank()) {
             modelConfig = modelRegistry.get(request.getModelName());
         }
-        if (modelConfig == null && request.getSkillId() != null && !request.getSkillId().isBlank()) {
-            try {
-                Skill skill = skillRegistry.resolve(request.getSkillId());
-                if (skill.getPreferredProvider() != null) {
-                    modelConfig = modelRegistry.select(skill.getPreferredProvider(), "general");
-                }
-            } catch (IllegalArgumentException ignored) {
-                // skill 不存在时直接走兜底
-            }
+        if (request.getModelName() != null && !request.getModelName().isBlank()
+                && (modelConfig == null || !modelConfig.isEnabled())) {
+            throw new IllegalArgumentException("所选模型配置不存在或已禁用：" + request.getModelName());
         }
         if (modelConfig == null) {
-            modelConfig = modelRegistry.selectWithFallback("general");
+            modelConfig = modelRegistry.getAllConfigs().values().stream()
+                    .filter(ModelConfig::isEnabled).findFirst().orElse(null);
         }
         if (modelConfig == null) {
             throw new IllegalArgumentException("No model configured. Register one in Model Management first.");

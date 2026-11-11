@@ -30,20 +30,21 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 变更总结：同一入口在两个分析版本之间的「修改要点 + 测试要点」。
+ * 变更总结：同一入口在两个版本（分支/commit/tag 任意组合）之间。
  * <p>
- * 链路差异来自 code-intelligence 的 entry-chain-diff（git-backed：
- * 变更文本从 git blob 按坐标切片），本服务只负责把 diff 组织成
- * prompt（skill：change-summary）并解析 LLM 输出。
+ * 方案：不做服务端预 diff——分别拉取两个版本的【整条链路重建源码】
+ * （git 优先），完整交给模型，由模型理解意图、自行 diff、总结修改要点
+ * 并生成针对修改的测试要点；无实质改动时照实返回空结论。
+ * 同时产出成员级双版本源码清单，供前端以 git-diff 风格展示。
  */
 @Service
 public class ChangeSummaryService {
 
     private static final Logger log = LoggerFactory.getLogger(ChangeSummaryService.class);
     private static final Gson GSON = new Gson();
-    /** 每个 changed 方法注入 prompt 的源码片段上限（防 token 爆炸）。 */
-    private static final int MAX_SNIPPET_CHARS = 4000;
-    private static final int MAX_CHANGED_METHODS = 30;
+    /** 单方法注入上限与单版本链路总上限（控制 token）。 */
+    private static final int MAX_METHOD_CHARS = 4000;
+    private static final int MAX_VERSION_CHARS = 60_000;
 
     private final String queryServiceUrl;
     private final HttpClient httpClient;
@@ -70,115 +71,210 @@ public class ChangeSummaryService {
 
     public record SummaryPoint(String title, String detail) {}
     public record TestPoint(String scenario, String reason) {}
+    /** 成员级双版本源码（前端 git-diff 风格展示用）。status: ADDED/REMOVED/CHANGED/UNCHANGED。 */
+    public record MemberDiff(String signature, String label, String status,
+                             String fromSource, String toSource) {}
     public record ChangeSummaryResult(
             String anchor, String fromVersion, String toVersion,
-            int addedCount, int removedCount, int changedCount, boolean gitBacked,
+            int addedCount, int removedCount, int changedCount, int unchangedCount, boolean gitBacked,
+            List<MemberDiff> members,
             List<SummaryPoint> highlights, List<TestPoint> testPoints,
             String rawAnswer, String model) {}
 
     public ChangeSummaryResult summarize(ChangeSummaryRequest request) {
-        // 1. 链路差异（git-backed，来自 code-intelligence）
-        JsonObject diff = fetchEntryChainDiff(request);
+        // 1. 链路成员差集（用于计数与前端 status；源码不依赖它）
+        JsonObject diff = fetchJson(entryChainDiffUrl(request));
 
-        // 2. 组 prompt（skill: change-summary）
+        // 2. 两个版本的整条链路重建源码
+        List<Map<String, Object>> fromChain = fetchJsonList(entryChainSourceUrl(
+                request.getProjectId(), request.getClassName(), request.getMethodName(),
+                request.getFromBranch(), request.getFromCommitId()));
+        List<Map<String, Object>> toChain = fetchJsonList(entryChainSourceUrl(
+                request.getProjectId(), request.getClassName(), request.getMethodName(),
+                request.getToBranch(), request.getToCommitId()));
+
+        // 3. 成员级配对（canonical 签名）→ UI diff 数据 + 计数
+        Map<String, Map<String, Object>> fromBySig = byCanonical(fromChain);
+        Map<String, Map<String, Object>> toBySig = byCanonical(toChain);
+        List<MemberDiff> members = new ArrayList<>();
+        int added = 0, removed = 0, changed = 0, unchanged = 0;
+        for (Map.Entry<String, Map<String, Object>> e : toBySig.entrySet()) {
+            String sig = e.getKey();
+            String label = labelOf(e.getValue());
+            String toSrc = str(e.getValue().get("source"));
+            Map<String, Object> fromRow = fromBySig.get(sig);
+            if (fromRow == null) {
+                added++;
+                members.add(new MemberDiff(sig, label, "ADDED", null, toSrc));
+            } else {
+                String fromSrc = str(fromRow.get("source"));
+                if (java.util.Objects.equals(fromSrc, toSrc)) {
+                    unchanged++;
+                    members.add(new MemberDiff(sig, label, "UNCHANGED", fromSrc, toSrc));
+                } else {
+                    changed++;
+                    members.add(new MemberDiff(sig, label, "CHANGED", fromSrc, toSrc));
+                }
+            }
+        }
+        for (Map.Entry<String, Map<String, Object>> e : fromBySig.entrySet()) {
+            if (!toBySig.containsKey(e.getKey())) {
+                removed++;
+                members.add(new MemberDiff(e.getKey(), labelOf(e.getValue()), "REMOVED",
+                        str(e.getValue().get("source")), null));
+            }
+        }
+
+        // 4. 组 prompt（skill: change-summary）——双版本全链路源码交给模型自行 diff
         Skill skill = skillRegistry.resolve("change-summary");
         PromptTemplate template = promptManager.get(skill.getPromptTemplateId());
         Map<String, Object> variables = new LinkedHashMap<>();
         variables.put("anchor", request.getClassName() + "#" + request.getMethodName());
         variables.put("fromVersion", versionLabel(request.getFromBranch(), request.getFromCommitId()));
         variables.put("toVersion", versionLabel(request.getToBranch(), request.getToCommitId()));
-        variables.put("chainDiff", formatDiff(diff));
+        variables.put("membership", membershipBrief(added, removed, changed, unchanged));
+        variables.put("fromChainSource", formatChain(fromChain, "基准"));
+        variables.put("toChainSource", formatChain(toChain, "目标"));
         String userPrompt = template.renderUserPrompt(variables);
-        String systemPrompt = template.systemPrompt();
+        String systemPrompt = skill.enrichSystemPrompt(template.systemPrompt());
 
-        // 3. LLM
+        // 5. LLM
         LLMConfig config = resolveLLMConfig(request);
         LLMResponse response = llmIntegrationService.call(systemPrompt, userPrompt, config);
 
-        // 4. 解析（宽松：解析失败回退原文）
+        // 6. 解析（宽松；解析成功且为空数组 = 模型判定无实质改动，照实返回）
         Parsed parsed = parse(response.content());
         return new ChangeSummaryResult(
                 request.getClassName() + "#" + request.getMethodName(),
                 versionLabel(request.getFromBranch(), request.getFromCommitId()),
                 versionLabel(request.getToBranch(), request.getToCommitId()),
-                sizeOf(diff, "added"), sizeOf(diff, "removed"), sizeOf(diff, "changed"),
-                Boolean.TRUE.equals(diff.get("gitBacked") != null && diff.get("gitBacked").getAsBoolean()),
+                added, removed, changed, unchanged,
+                Boolean.TRUE.equals(diff.get("gitBacked") instanceof JsonElement je && je.getAsBoolean()),
+                members,
                 parsed.highlights(), parsed.testPoints(),
                 response.content(), response.model());
     }
 
-    // ── diff 获取与格式化 ─────────────────────────────────────────────────
+    // ── code-intelligence 调用 ────────────────────────────────────────────
 
-    private JsonObject fetchEntryChainDiff(ChangeSummaryRequest request) {
-        String url = queryServiceUrl + "/api/query/entry-chain-diff"
-                + "?projectId=" + request.getProjectId()
-                + "&className=" + urlEncode(request.getClassName())
-                + "&methodName=" + urlEncode(request.getMethodName())
-                + "&fromBranch=" + urlEncode(nullToEmpty(request.getFromBranch()))
-                + "&toBranch=" + urlEncode(nullToEmpty(request.getToBranch()))
-                + (blank(request.getFromCommitId()) ? "" : "&fromCommitId=" + urlEncode(request.getFromCommitId()))
-                + (blank(request.getToCommitId()) ? "" : "&toCommitId=" + urlEncode(request.getToCommitId()));
+    private String entryChainDiffUrl(ChangeSummaryRequest r) {
+        return queryServiceUrl + "/api/query/entry-chain-diff"
+                + "?projectId=" + r.getProjectId()
+                + "&className=" + urlEncode(r.getClassName())
+                + "&methodName=" + urlEncode(r.getMethodName())
+                + "&fromBranch=" + urlEncode(nullToEmpty(r.getFromBranch()))
+                + "&toBranch=" + urlEncode(nullToEmpty(r.getToBranch()))
+                + (blank(r.getFromCommitId()) ? "" : "&fromCommitId=" + urlEncode(r.getFromCommitId()))
+                + (blank(r.getToCommitId()) ? "" : "&toCommitId=" + urlEncode(r.getToCommitId()));
+    }
+
+    private String entryChainSourceUrl(Long projectId, String className, String methodName,
+                                       String branch, String commitId) {
+        return queryServiceUrl + "/api/query/entry-chain-source"
+                + "?projectId=" + projectId
+                + "&className=" + urlEncode(className)
+                + "&methodName=" + urlEncode(methodName)
+                + "&branch=" + urlEncode(nullToEmpty(branch))
+                + (blank(commitId) ? "" : "&commitId=" + urlEncode(commitId));
+    }
+
+    private JsonObject fetchJson(String url) {
         try {
-            HttpRequest httpRequest = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(Duration.ofSeconds(60))
-                    .GET().build();
-            HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = httpClient.send(HttpRequest.newBuilder()
+                            .uri(URI.create(url)).timeout(Duration.ofSeconds(60)).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
             JsonObject root = GSON.fromJson(response.body(), JsonObject.class);
-            if (response.statusCode() != 200 || !Boolean.TRUE.equals(root.get("success") instanceof JsonElement e && e.getAsBoolean())) {
-                throw new IllegalArgumentException("链路差异查询失败: " + strOr(root, "message", "HTTP " + response.statusCode()));
+            if (response.statusCode() != 200 || !success(root)) {
+                throw new IllegalArgumentException("查询失败: " + strOr(root, "message", "HTTP " + response.statusCode()));
             }
             return root.getAsJsonObject("data");
         } catch (IllegalArgumentException e) {
             throw e;
         } catch (Exception e) {
-            throw new IllegalArgumentException("无法访问链路差异服务: " + e.getMessage(), e);
+            throw new IllegalArgumentException("无法访问查询服务: " + e.getMessage(), e);
         }
     }
 
-    private String formatDiff(JsonObject diff) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("gitBacked: ").append(diff.get("gitBacked")).append('\n');
-
-        appendRefs(sb, "新增方法（仅目标版本存在）", diff.getAsJsonArray("added"));
-        appendRefs(sb, "移除方法（仅基准版本存在）", diff.getAsJsonArray("removed"));
-
-        JsonArray changed = diff.getAsJsonArray("changed");
-        if (changed == null) {
-            changed = new JsonArray();
-        }
-        sb.append("变更方法（两版本源码不同）：").append(changed.size()).append(" 个\n");
-        int limit = Math.min(changed.size(), MAX_CHANGED_METHODS);
-        for (int i = 0; i < limit; i++) {
-            JsonObject m = changed.get(i).getAsJsonObject();
-            JsonObject method = m.getAsJsonObject("method");
-            sb.append("\n### ").append(strOr(method, "qualifiedClassName", "?"))
-              .append("#").append(strOr(method, "methodName", "?")).append('\n');
-            sb.append("基准版本源码:\n```").append(abbreviate(strOr(m, "fromSource", ""), MAX_SNIPPET_CHARS)).append("\n```\n");
-            sb.append("目标版本源码:\n```").append(abbreviate(strOr(m, "toSource", ""), MAX_SNIPPET_CHARS)).append("\n```\n");
-        }
-        if (changed.size() > limit) {
-            sb.append("（其余 ").append(changed.size() - limit).append(" 个变更方法已截断）\n");
-        }
-        sb.append("未变化方法数: ").append(diff.get("unchangedCount")).append('\n');
-        return sb.toString();
-    }
-
-    private static void appendRefs(StringBuilder sb, String label, JsonArray refs) {
-        int size = refs == null ? 0 : refs.size();
-        sb.append(label).append("：").append(size).append(" 个\n");
-        if (refs != null) {
-            for (JsonElement ref : refs) {
-                JsonObject r = ref.getAsJsonObject();
-                sb.append("- ").append(strOr(r, "qualifiedClassName", "?"))
-                  .append("#").append(strOr(r, "methodName", "?")).append('\n');
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> fetchJsonList(String url) {
+        try {
+            HttpResponse<String> response = httpClient.send(HttpRequest.newBuilder()
+                            .uri(URI.create(url)).timeout(Duration.ofSeconds(60)).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            JsonObject root = GSON.fromJson(response.body(), JsonObject.class);
+            if (response.statusCode() != 200 || !success(root)) {
+                throw new IllegalArgumentException("链路源码查询失败: " + strOr(root, "message", "HTTP " + response.statusCode()));
             }
+            JsonElement data = root.get("data");
+            return data instanceof JsonArray a
+                    ? GSON.fromJson(a, List.class)
+                    : new ArrayList<>();
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException("无法访问查询服务: " + e.getMessage(), e);
         }
+    }
+
+    private static boolean success(JsonObject root) {
+        JsonElement e = root.get("success");
+        return e != null && e.isJsonPrimitive() && e.getAsBoolean();
+    }
+
+    // ── prompt 组装 ───────────────────────────────────────────────────────
+
+    private static Map<String, Map<String, Object>> byCanonical(List<Map<String, Object>> chain) {
+        Map<String, Map<String, Object>> out = new LinkedHashMap<>();
+        for (Map<String, Object> m : chain) {
+            out.putIfAbsent(canonical(str(m.get("signature"))), m);
+        }
+        return out;
+    }
+
+    /** 与 code-intelligence 的 SignatureNormalizer 同规范：", " → ","。 */
+    private static String canonical(String sig) {
+        return sig == null ? "" : sig.replace(", ", ",");
+    }
+
+    private static String labelOf(Map<String, Object> row) {
+        String cls = str(row.get("qualifiedClassName"));
+        String simple = cls != null && cls.contains(".")
+                ? cls.substring(cls.lastIndexOf('.') + 1) : cls;
+        return simple + "#" + str(row.get("methodName"));
+    }
+
+    private static String membershipBrief(int added, int removed, int changed, int unchanged) {
+        return ("链路成员配对（服务端按签名统计，仅供参考，以你自己的源码对比为准）：\n"
+                + "新增 %d / 移除 %d / 源码变更 %d / 未变化 %d%n").formatted(added, removed, changed, unchanged);
+    }
+
+    /** 一个版本的链路源码清单：每个方法 `#### 类#方法` + 代码块。 */
+    private static String formatChain(List<Map<String, Object>> chain, String tag) {
+        if (chain == null || chain.isEmpty()) {
+            return "（" + tag + "版本链路为空：入口不存在）";
+        }
+        StringBuilder sb = new StringBuilder();
+        int total = 0;
+        for (Map<String, Object> m : chain) {
+            String label = labelOf(m);
+            String src = abbreviate(str(m.get("source")), MAX_METHOD_CHARS);
+            if (src == null || src.isBlank()) {
+                src = "（源码不可得）";
+            }
+            String block = "#### " + label + "\n```\n" + src + "\n```\n";
+            if (total + block.length() > MAX_VERSION_CHARS) {
+                sb.append("…（其余 ").append(chain.size()).append(" 个成员中部分已截断）\n");
+                break;
+            }
+            sb.append(block);
+            total += block.length();
+        }
+        return sb.toString();
     }
 
     // ── LLM 输出解析 ──────────────────────────────────────────────────────
 
-    private record Parsed(List<SummaryPoint> highlights, List<TestPoint> testPoints) {}
+    private record Parsed(boolean ok, List<SummaryPoint> highlights, List<TestPoint> testPoints) {}
 
     private Parsed parse(String content) {
         List<SummaryPoint> highlights = new ArrayList<>();
@@ -194,16 +290,14 @@ public class ChangeSummaryService {
                 JsonObject o = e.getAsJsonObject();
                 testPoints.add(new TestPoint(strOr(o, "scenario", ""), strOr(o, "reason", "")));
             }
+            return new Parsed(true, highlights, testPoints);
         } catch (Exception e) {
-            log.warn("变更总结输出解析失败，回退原文展示: {}", e.getMessage());
-        }
-        if (highlights.isEmpty() && testPoints.isEmpty()) {
+            log.warn("变更总结输出解析失败，回退原文: {}", e.getMessage());
             highlights.add(new SummaryPoint("总结（原文）", content));
+            return new Parsed(false, highlights, testPoints);
         }
-        return new Parsed(highlights, testPoints);
     }
 
-    /** 提取 ```json 围栏或裸 JSON 对象。 */
     private static String extractJson(String content) {
         if (content == null) return "{}";
         int fence = content.indexOf("```json");
@@ -227,9 +321,8 @@ public class ChangeSummaryService {
         return e != null && !e.isJsonNull() ? e.getAsString() : def;
     }
 
-    private static int sizeOf(JsonObject diff, String key) {
-        JsonElement e = diff.get(key);
-        return e instanceof JsonArray a ? a.size() : 0;
+    private static String str(Object o) {
+        return o instanceof String s ? s : null;
     }
 
     private static String versionLabel(String branch, String commitId) {

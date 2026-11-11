@@ -26,7 +26,7 @@ export default function RequirementSourceManager() {
     }).catch(() => setSources([]));
   }, []);
 
-  const loadConfig = (sourceType: string) => {
+  function loadConfig(sourceType: string) {
     setActive(sourceType);
     reviewApi.getRequirementConfig(sourceType).then((cfg: any) => {
       form.setFieldsValue({
@@ -35,7 +35,7 @@ export default function RequirementSourceManager() {
         secret: cfg?.secret ?? '',
       });
     }).catch(() => form.resetFields());
-  };
+  }
 
   const save = async () => {
     const values = await form.validateFields();

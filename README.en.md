@@ -52,12 +52,12 @@ Agent tools like Claude Code, Cursor, and Codex — plus tree-sitter based solut
 |---------|------|-----------------------|
 | **Only file diffs are visible** | Unknown which endpoints, services, or downstream dependents are affected | Enumerate upstream callers, downstream callees, and full affected paths by method/function nodes |
 | **Syntactic indexing is imprecise** | tree-sitter/ctags match by name — overloads, interface dispatch, and polymorphic calls are indistinguishable | Type-accurate resolution via go/types and IntelliJ PSI; interface dispatch fanned out by the type system |
-| **Test scope relies on intuition** | Small changes may miss critical paths; large changes over-test | Narrow or widen test scope based on call-chain impact paths with explainable evidence |
+| **Test scope relies on intuition** | Small changes may miss critical paths; large changes over-test | **Precision testing**: scope regression by call-chain impact paths (affected entry points = regression case set) with explainable evidence |
 | **Framework-implicit relations are invisible** | DI, AOP, event routing, async scheduling break the call chain | Adapters register semantic extractors for each language's mainstream frameworks |
 | **LLM Review lacks business context** | Reviewing isolated diffs misses requirement semantics | Resolve requirements to call paths, restore per-step source code for focused LLM review |
 | **Version evolution is hard to trace** | Chain changes across tags/commits/branches require manual comparison | Graph snapshots per branch/commit; git-backed chain-member + source diff, with LLM-generated change & test highlights |
 
-**In one sentence: Turn code changes into queryable, explainable, auditable impact scope and source evidence.**
+**In one sentence: Turn code changes into queryable, explainable, auditable impact scope and source evidence — enabling precision testing (change-impact-based regression scoping).**
 
 ---
 
@@ -200,7 +200,7 @@ Query the call chain around a changed method:
 - **downstream** — which downstream dependencies this method affects
 - **affected paths** — the full path assembled from upstream to downstream
 
-Used to determine which test entry points need regression: API endpoints, message listeners, scheduled tasks, service root methods, etc.
+Used to determine which test entry points need regression: API endpoints, message listeners, scheduled tasks, service root methods, etc. — the core of **precision testing**: changed X ⇒ regress only the entries that reach X; pair with the change summary's test points to produce a regression case list directly.
 
 ### 4.3 Source Restoration + LLM Review
 
@@ -353,7 +353,6 @@ Architecture docs record conclusions; this section records the **why** — the o
 - **TypeScript / Python Adapters**: Follow the Go Adapter's sidecar pattern (native toolchain + HTTP contract); Python will face both dynamic typing and framework decorators
 - **PSI Throughput Governance**: Upstream concurrency limiting → instance pool scale-out (single-flight is an IntelliJ platform constraint) → open-project caching to amortize indexing
 - **Framework Profiles**: Pluggable profiles for JVM (Quarkus/Micronaut CDI semantics); Go already done via the `--routers` whitelist
-- **review-agent Data Access Convergence**: Migrate LookupController's direct MySQL reads to code-intelligence API calls, removing cross-service schema coupling
 - **Runtime Strategy Pattern Resolution**: Eliminate impossible candidate edges for patterns like `Map<String, Strategy>`, strategy registries, config-driven routing
 - **Review Agent Observability**: Review session duration distribution, token consumption, Skill execution traces
 - **CI/CD Native Integration**: Standardized GitHub Actions / GitLab CI pipeline — commit triggers analysis triggers feedback

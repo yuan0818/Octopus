@@ -1,3 +1,4 @@
+import { projectOptions } from '../../components/projectOptions';
 import { useState, useRef, useEffect } from 'react';
 import {
   Card, Input, Button, Tag, Typography, Space, Divider, List, Collapse, Select,
@@ -15,16 +16,14 @@ import type { UploadProps } from 'antd';
 import { reviewApi } from '../../api/review';
 import { adminApi } from '../../api/admin';
 import { queryApi } from '../../api/query';
-import { useBranchCommit } from '../../components/BranchCommitContext';
+import { useBranchCommit } from '../../components/branchCommitState';
 import BranchCommitInlineSelector from '../../components/BranchCommitInlineSelector';
 import type { ReviewResponse, RequirementCheck, CodeIssue, RequirementItem } from '../../types';
+import { palette, severityColor } from '../../theme';
 
 const { Text, Paragraph } = Typography;
 const { Panel } = Collapse;
 
-const severityColor: Record<string, string> = {
-  BLOCKER: '#ff4d4f', CRITICAL: '#ff7a45', WARNING: '#faad14', INFO: '#1677ff',
-};
 
 export default function ReviewPage() {
   const { message } = App.useApp();
@@ -118,7 +117,7 @@ export default function ReviewPage() {
       : reviewApi.listClasses(projectId, undefined, branch, commitId);
     loader.then(d => setClasses(Array.isArray(d) ? d : [])).catch(() => {});
     setClassId(undefined); setClassName(''); setMethods([]); setMethodName('');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [projectId, entryMode, branch, commitId]);
 
   // ── Load methods when class changes ──
@@ -280,39 +279,39 @@ export default function ReviewPage() {
 
   // ── Render helpers ──
   const renderCheck = (check: RequirementCheck) => (
-    <div key={check.requirementId} style={{ background: check.passed ? '#f6ffed' : '#fff2f0', borderRadius: 8, padding: '12px 16px', marginBottom: 8, border: `1px solid ${check.passed ? '#b7eb8f' : '#ffccc7'}` }}>
+    <div key={check.requirementId} style={{ background: check.passed ? palette.successBg : palette.errorBg, borderRadius: 8, padding: '12px 16px', marginBottom: 8, border: `1px solid ${check.passed ? palette.successBorder : palette.errorBorder}` }}>
       <Space>
-        {check.passed ? <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 18 }} /> : <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 18 }} />}
+        {check.passed ? <CheckCircleOutlined style={{ color: palette.success, fontSize: 18 }} /> : <CloseCircleOutlined style={{ color: palette.error, fontSize: 18 }} />}
         <Text strong>{check.requirementId}: {check.requirementTitle}</Text>
         <Tag color={check.confidence === 'HIGH' ? 'green' : check.confidence === 'MEDIUM' ? 'orange' : 'default'}>{check.confidence}</Tag>
       </Space>
-      <Paragraph style={{ margin: '8px 0 0', color: '#555' }}>{check.detail}</Paragraph>
+      <Paragraph style={{ margin: '8px 0 0', color: palette.textSecondary }}>{check.detail}</Paragraph>
       {check.highlightedCode && (
         <pre className="code-block">
           <code>{check.highlightedCode}</code>
         </pre>
       )}
       {check.codeReferences?.map((ref, i) => <Tag key={i} icon={<CodeOutlined />}>{ref}</Tag>)}
-      {check.suggestion && <Alert type="info" showIcon icon={<InfoCircleOutlined />} message={check.suggestion} style={{ marginTop: 8, background: '#e6f7ff', border: 'none' }} />}
+      {check.suggestion && <Alert type="info" showIcon icon={<InfoCircleOutlined />} message={check.suggestion} style={{ marginTop: 8, background: palette.primaryBg, border: 'none' }} />}
     </div>
   );
 
   const renderIssue = (issue: CodeIssue) => (
-    <div key={issue.description} style={{ background: '#fff', borderRadius: 8, padding: '12px 16px', marginBottom: 8, border: `1px solid ${severityColor[issue.severity] || '#d9d9d9'}44` }}>
-      <Space><Badge color={severityColor[issue.severity] || '#999'} /><Tag color={severityColor[issue.severity] || 'default'}>{issue.severity}</Tag><Tag>{issue.category}</Tag></Space>
-      <Paragraph style={{ margin: '8px 0 0', color: '#333' }}>{issue.description}</Paragraph>
+    <div key={issue.description} style={{ background: palette.bgContainer, borderRadius: 8, padding: '12px 16px', marginBottom: 8, border: `1px solid ${severityColor[issue.severity] || palette.border}44` }}>
+      <Space><Badge color={severityColor[issue.severity] || palette.textTertiary} /><Tag color={severityColor[issue.severity] || 'default'}>{issue.severity}</Tag><Tag>{issue.category}</Tag></Space>
+      <Paragraph style={{ margin: '8px 0 0', color: palette.text }}>{issue.description}</Paragraph>
       {issue.highlightedCode && (
         <pre className="code-block">
           <code>{issue.highlightedCode}</code>
         </pre>
       )}
       {issue.codeReferences?.map((ref, i) => <Tag key={i} icon={<CodeOutlined />}>{ref}</Tag>)}
-      {issue.suggestion && <Alert type="success" showIcon icon={<CheckCircleOutlined />} message={issue.suggestion} style={{ marginTop: 8, background: '#f6ffed', border: 'none' }} />}
+      {issue.suggestion && <Alert type="success" showIcon icon={<CheckCircleOutlined />} message={issue.suggestion} style={{ marginTop: 8, background: palette.successBg, border: 'none' }} />}
       <Button
         size="small"
         type="text"
         icon={<CommentOutlined />}
-        style={{ marginTop: 8, color: '#1677ff', padding: 0 }}
+        style={{ marginTop: 8, color: palette.primary, padding: 0 }}
         onClick={() => askAboutIssue({ id: issue.codeReferences?.[0] ?? '', title: issue.description })}
       >
         追问此问题
@@ -332,7 +331,7 @@ export default function ReviewPage() {
           <div className="form-field">
             <span className="form-label">审查 Skill</span>
             <Select style={{ width: '100%' }} value={selectedSkillId} onChange={setSelectedSkillId}
-              options={skills.map(s => ({ value: s.id, label: `[${s.preferredProvider}] ${s.name} (${s.id})` }))}
+              options={skills.map(s => ({ value: s.id, label: `${s.name} (${s.id})` }))}
               placeholder="选择审查 Skill"
               notFoundContent={<span>暂无 Skill，请先在 Agent 配置中创建 <Button size="small" type="link" onClick={() => window.location.href = '/admin'}>去配置</Button></span>}
             />
@@ -380,8 +379,7 @@ export default function ReviewPage() {
                 }
               }}
               placeholder="选择项目"
-              options={(entryMode === 'endpoints' ? projects.filter(p => p.isApiService) : projects)
-                .map(p => ({ value: p.id, label: `${p.projectName} [${p.branch || 'default'}]` }))}
+              options={projectOptions(entryMode === 'endpoints' ? projects.filter(p => p.isApiService) : projects)}
               showSearch optionFilterProp="label"
               notFoundContent={
                 entryMode === 'endpoints'
@@ -517,7 +515,7 @@ export default function ReviewPage() {
               activeKey={historyExpanded ? ['history'] : []}
               onChange={(keys) => setHistoryExpanded(keys.includes('history'))}
               ghost size="small"
-              style={{ borderBottom: '1px solid #f0f0f0' }}
+              style={{ borderBottom: `1px solid ${palette.borderSubtle}` }}
               items={[{
                 key: 'history',
                 label: <Space><HistoryOutlined /><Text type="secondary" style={{ fontSize: 13 }}>审查历史 ({historySessions.length})</Text></Space>,
@@ -532,8 +530,8 @@ export default function ReviewPage() {
                         key={s.id}
                         style={{
                           padding: '8px 12px', marginBottom: 4, borderRadius: 6,
-                          border: '1px solid #f0f0f0', cursor: 'pointer',
-                          background: '#fafafa', transition: 'background 0.15s',
+                          border: `1px solid ${palette.borderSubtle}`, cursor: 'pointer',
+                          background: palette.bgSubtle, transition: 'background 0.15s',
                         }}
                         onClick={() => {
                           // Load session report into chat
@@ -547,10 +545,10 @@ export default function ReviewPage() {
                                 data: report,
                               }]);
                             }
-                          } catch {}
+                          } catch { /* 历史会话读取失败时不打断当前对话 */ }
                         }}
-                        onMouseEnter={e => (e.currentTarget.style.background = '#e6f4ff')}
-                        onMouseLeave={e => (e.currentTarget.style.background = '#fafafa')}
+                        onMouseEnter={e => (e.currentTarget.style.background = palette.primaryBg)}
+                        onMouseLeave={e => (e.currentTarget.style.background = palette.bgSubtle)}
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
                           <Text strong style={{ fontSize: 13 }}>
@@ -577,10 +575,10 @@ export default function ReviewPage() {
           <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
             {messages.map((msg, idx) => {
               const isAssistant = msg.role === 'assistant';
-              const avatarStyle = isAssistant ? { background: 'linear-gradient(135deg, #1677ff, #69b1ff)' }
-                : msg.role === 'user' ? { background: 'linear-gradient(135deg, #52c41a, #95de64)' }
-                : msg.role === 'error' ? { background: '#ff4d4f' }
-                : { background: '#8c8c8c' };
+              const avatarStyle = isAssistant ? { background: `linear-gradient(135deg, ${palette.primary}, ${palette.primaryLight})` }
+                : msg.role === 'user' ? { background: `linear-gradient(135deg, ${palette.success}, ${palette.successLight})` }
+                : msg.role === 'error' ? { background: palette.error }
+                : { background: palette.textTertiary };
               const avatarIcon = isAssistant ? <RobotOutlined />
                 : msg.role === 'user' ? <UserOutlined />
                 : msg.role === 'error' ? <WarningOutlined />
@@ -627,7 +625,7 @@ export default function ReviewPage() {
                             </Panel>
                           </Collapse>
                         )}
-                        <div style={{ marginTop: 12, fontSize: 12, color: '#999' }}>
+                        <div style={{ marginTop: 12, fontSize: 12, color: palette.textTertiary }}>
                           <Space split={<Divider type="vertical" />}>
                             <span>会话: {msg.data.sessionId}</span>
                             <span>涉及: {msg.data.involvedClasses} 类 / {msg.data.totalMethods} 方法</span>
@@ -644,7 +642,7 @@ export default function ReviewPage() {
           </div>
 
           {/* 追问输入区：结构化审查完成后激活（混合形态的对话层） */}
-          <div style={{ borderTop: '1px solid #f0f0f0', padding: '10px 16px', background: '#fafafa' }}>
+          <div style={{ borderTop: `1px solid ${palette.borderSubtle}`, padding: '10px 16px', background: palette.bgSubtle }}>
             <Input.TextArea
               ref={chatInputRef}
               value={chatInput}
@@ -672,7 +670,7 @@ export default function ReviewPage() {
           </div>
 
           {historyFindings.length > 0 && (
-            <div style={{ borderTop: '1px solid #f0f0f0', padding: '8px 16px', background: '#fafafa', maxHeight: 80, overflow: 'auto' }}>
+            <div style={{ borderTop: `1px solid ${palette.borderSubtle}`, padding: '8px 16px', background: palette.bgSubtle, maxHeight: 80, overflow: 'auto' }}>
               <Text type="secondary" style={{ fontSize: 12 }}>📋 该类历史审查发现: {historyFindings.slice(-3).map((f: any) => f.findingText).join('; ')}</Text>
             </div>
           )}

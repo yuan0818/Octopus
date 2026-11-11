@@ -138,6 +138,26 @@ public class GitSourceProvider {
         return String.join("\n", Arrays.copyOfRange(lines, startIdx, endIdx));
     }
 
+    /** Enumerate tracked regular files from the selected commit, never the working directory. */
+    public java.util.List<String> tree(long projectId, String commitId) {
+        if (commitId == null || !commitId.matches("[a-fA-F0-9]{40}")) throw new IllegalArgumentException("需要完整提交编号");
+        try {
+            var repo = getRepository(projectId);
+            if (repo == null) throw new IllegalStateException("仓库不可读取");
+            try (var walk = new RevWalk(repo); var tree = new TreeWalk(repo)) {
+                tree.addTree(walk.parseCommit(ObjectId.fromString(commitId)).getTree()); tree.setRecursive(true);
+                var paths = new java.util.ArrayList<String>();
+                while (tree.next()) {
+                    var mode = tree.getFileMode(0);
+                    if (!mode.equals(org.eclipse.jgit.lib.FileMode.REGULAR_FILE) && !mode.equals(org.eclipse.jgit.lib.FileMode.EXECUTABLE_FILE)) continue;
+                    paths.add(tree.getPathString());
+                    if (paths.size() > 30000) throw new IllegalArgumentException("仓库目录超过三万个文件，暂不支持完整编排分析");
+                }
+                return java.util.List.copyOf(paths);
+            }
+        } catch (IOException e) { throw new IllegalStateException("指定提交目录不可读取"); }
+    }
+
     /** SHA 缩写（不足 8 位时原样返回，避免 substring 越界）。 */
     private String shortSha(String commitId) {
         return commitId.length() > 8 ? commitId.substring(0, 8) : commitId;
@@ -256,18 +276,29 @@ public class GitSourceProvider {
         return null;
     }
 
-    /** 从项目路径向上找 .git（与 code-intelligence LocalGitDetector 的探测边界一致：自身或直接父目录）。 */
+    /** 向上找 .git 的最大层数（monorepo 模块目录可能在 git 根下多层）。 */
+    private static final int MAX_GIT_ROOT_DEPTH = 4;
+
+    /**
+     * 从项目路径向上找 git 工作区（自身 + 最多 4 层祖先）。
+     * blob 按 commit hash 定位：走到的仓库若不含该 commit 会 resolve 失败报错，
+     * 不会取到错数据，因此向上多探几层是安全的。
+     */
     private String findGitWorkTree(String projectPath) {
         Path dir = Path.of(projectPath);
         if (!Files.isDirectory(dir)) {
             return null;
         }
-        for (Path p : new Path[]{dir, dir.getParent()}) {
-            if (p != null && Files.isDirectory(p.resolve(".git"))) {
+        for (Path p = dir; p != null && depthBelow(dir, p) <= MAX_GIT_ROOT_DEPTH; p = p.getParent()) {
+            if (Files.isDirectory(p.resolve(".git"))) {
                 return p.toString();
             }
         }
         return null;
+    }
+
+    private static int depthBelow(Path base, Path current) {
+        return base.getNameCount() - current.getNameCount();
     }
 
     /** 查询 analyzed_project 的 repo_url（repo 驱动）与 project_path（本地）。 */

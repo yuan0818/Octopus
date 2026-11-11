@@ -84,7 +84,7 @@ class QueryServiceTest {
                 classInterfaceRelationRepository,
                 javaProjectRepository,
                 gitService,
-                repoConfigService
+                repoConfigService, org.mockito.Mockito.mock(RepositoryScopeService.class)
         );
     }
 

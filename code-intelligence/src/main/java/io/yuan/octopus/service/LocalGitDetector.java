@@ -89,16 +89,24 @@ public class LocalGitDetector {
     }
 
     /**
-     * True when the path itself or its direct parent contains a {@code .git}
+     * True when the path itself or an ancestor within two levels contains a {@code .git}
      * (directory, or a file for linked worktrees/submodules).
+     * <p>
+     * 覆盖两类合法形态：仓库检出目录（自身）与 monorepo 下的模块目录
+     * （如 workspace/repo/module-server，git 根在两层之上）；更深的嵌套
+     * （如测试夹具嵌在其他项目源码树里）不视为本项目仓库，避免借用
+     * 无关仓库的分支/HEAD。
      */
     private boolean isGitRootOrDirectChild(Path projectPath) {
         Path abs = projectPath.toAbsolutePath();
-        if (Files.exists(abs.resolve(".git"))) {
-            return true;
+        Path p = abs;
+        for (int depth = 0; depth <= 2 && p != null; depth++) {
+            if (Files.exists(p.resolve(".git"))) {
+                return true;
+            }
+            p = p.getParent();
         }
-        Path parent = abs.getParent();
-        return parent != null && Files.exists(parent.resolve(".git"));
+        return false;
     }
 
     /**

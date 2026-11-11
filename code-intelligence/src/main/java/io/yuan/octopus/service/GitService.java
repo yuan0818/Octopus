@@ -544,6 +544,16 @@ public class GitService {
      * @param headCommitId  head commit SHA (patchset / merge commit)
      * @return list of {@link FileLineChanges}, one per changed {@code .java} file
      */
+    /** Includes non-code files so impact callers can explicitly report unsupported changes. */
+    public List<String> computeChangedPaths(Path localPath,String baseCommitId,String targetCommitId) {
+        try(Git git=Git.open(localPath.toFile());ObjectReader reader=git.getRepository().newObjectReader()) {
+            var before=new CanonicalTreeParser();before.reset(reader,resolveCommitTree(git.getRepository(),baseCommitId));
+            var after=new CanonicalTreeParser();after.reset(reader,resolveCommitTree(git.getRepository(),targetCommitId));
+            return git.diff().setOldTree(before).setNewTree(after).setShowNameAndStatusOnly(true).call().stream()
+                    .map(e->e.getChangeType()==DiffEntry.ChangeType.DELETE?e.getOldPath():e.getNewPath()).distinct().sorted().toList();
+        }catch(Exception e){throw new GitOperationException("Failed to list changed paths",e);}
+    }
+
     public List<FileLineChanges> computeChangedLineRanges(Path localPath,
                                                            String baseCommitId,
                                                            String headCommitId) {
@@ -574,6 +584,7 @@ public class GitService {
                     case ADD, MODIFY, COPY -> {
                         changeType = entry.getChangeType() == DiffEntry.ChangeType.ADD ? "ADD" : "MODIFY";
                         newRelPath = entry.getNewPath();
+                        if (entry.getChangeType() != DiffEntry.ChangeType.ADD) oldRelPath = entry.getOldPath();
                     }
                     case RENAME -> {
                         changeType = "RENAME";
@@ -583,24 +594,26 @@ public class GitService {
                     case DELETE -> {
                         changeType = "DELETE";
                         newRelPath = entry.getOldPath();
+                        oldRelPath = entry.getOldPath();
                     }
                     default -> {
                         continue;
                     }
                 }
-                if (!newRelPath.endsWith(".java")
-                        && !(oldRelPath != null && oldRelPath.endsWith(".java"))) {
+                if (!isSourceFile(newRelPath)
+                        && !(oldRelPath != null && isSourceFile(oldRelPath))) {
                     continue;
                 }
 
-                List<int[]> ranges = computeEditLineRanges(repo, entry);
-                String newAbs = newRelPath.endsWith(".java") ? localPath.resolve(newRelPath).toString() : null;
-                String oldAbs = oldRelPath != null && oldRelPath.endsWith(".java")
+                List<int[]> ranges = computeEditLineRanges(repo, entry, false);
+                List<int[]> oldRanges = computeEditLineRanges(repo, entry, true);
+                String newAbs = isSourceFile(newRelPath) ? localPath.resolve(newRelPath).toString() : null;
+                String oldAbs = oldRelPath != null && isSourceFile(oldRelPath)
                         ? localPath.resolve(oldRelPath).toString() : null;
                 // For DELETE there is no NEW-side file; carry the old path as filePath so callers
                 // can look up base-version methods by the (old) file path.
                 String filePath = "DELETE".equals(changeType) ? oldAbs : newAbs;
-                result.add(new FileLineChanges(filePath, oldAbs, changeType, ranges));
+                result.add(new FileLineChanges(filePath, oldAbs, changeType, ranges, oldRanges));
             }
             return result;
         } catch (GitOperationException e) {
@@ -617,7 +630,7 @@ public class GitService {
      * an empty list for ADD (whole file new — caller treats all methods as added)
      * and DELETE (no NEW-side lines).
      */
-    private List<int[]> computeEditLineRanges(Repository repo, DiffEntry entry) throws Exception {
+    private List<int[]> computeEditLineRanges(Repository repo, DiffEntry entry, boolean oldSide) throws Exception {
         if (entry.getChangeType() == DiffEntry.ChangeType.ADD
                 || entry.getChangeType() == DiffEntry.ChangeType.DELETE) {
             return List.of();
@@ -631,17 +644,11 @@ public class GitService {
         byte[] newBytes = repo.open(newBlob, Constants.OBJ_BLOB).getBytes();
         RawText oldText = new RawText(oldBytes);
         RawText newText = new RawText(newBytes);
-        if (oldText.size() == 0 || newText.size() == 0) {
-            return List.of();
-        }
         EditList edits = new HistogramDiff().diff(RawTextComparator.DEFAULT, oldText, newText);
         List<int[]> ranges = new ArrayList<>();
         for (Edit edit : edits) {
-            int beginB = edit.getBeginB(); // 0-based, inclusive
-            int endB = edit.getEndB();     // 0-based, exclusive
-            if (edit.getType() == Edit.Type.DELETE) {
-                continue; // no NEW-side lines
-            }
+            int beginB = oldSide ? edit.getBeginA() : edit.getBeginB();
+            int endB = oldSide ? edit.getEndA() : edit.getEndB();
             if (endB <= beginB) {
                 continue;
             }
@@ -712,9 +719,14 @@ public class GitService {
         }
     }
 
+    /** 受分析管线的源码扩展（JVM + Go）；tag 增量 diff 与变更行定位共用。 */
+    private static boolean isSourceFile(String path) {
+        return path != null && (path.endsWith(".java") || path.endsWith(".go"));
+    }
+
     /**
      * Classifies diff entries into changed (added/modified/copied/renamed-to) and
-     * deleted {@code .java} file absolute paths.
+     * deleted source-file absolute paths（.java / .go）。
      */
     private DiffResult classifyJavaDiff(List<DiffEntry> entries, Path localPath) {
         Set<String> changedFiles = new HashSet<>();
@@ -723,23 +735,23 @@ public class GitService {
             switch (entry.getChangeType()) {
                 case ADD, MODIFY, COPY -> {
                     String path = entry.getNewPath();
-                    if (path.endsWith(".java")) {
+                    if (isSourceFile(path)) {
                         changedFiles.add(localPath.resolve(path).toString());
                     }
                 }
                 case RENAME -> {
                     String oldPath = entry.getOldPath();
-                    if (oldPath.endsWith(".java")) {
+                    if (isSourceFile(oldPath)) {
                         deletedFiles.add(localPath.resolve(oldPath).toString());
                     }
                     String newPath = entry.getNewPath();
-                    if (newPath.endsWith(".java")) {
+                    if (isSourceFile(newPath)) {
                         changedFiles.add(localPath.resolve(newPath).toString());
                     }
                 }
                 case DELETE -> {
                     String path = entry.getOldPath();
-                    if (path.endsWith(".java")) {
+                    if (isSourceFile(path)) {
                         deletedFiles.add(localPath.resolve(path).toString());
                     }
                 }

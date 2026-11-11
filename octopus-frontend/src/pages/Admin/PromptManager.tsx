@@ -4,6 +4,8 @@ import {
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons';
 import { adminApi } from '../../api/admin';
+import RichTextEditor from '../../components/RichTextEditor';
+import { palette } from '../../theme';
 
 const { TextArea } = Input;
 
@@ -32,7 +34,7 @@ export default function PromptManager() {
       const items: PromptTemplate[] = [];
       if (Array.isArray(ids)) {
         for (const id of ids) {
-          try { items.push(await adminApi.getPromptTemplate(id)); } catch {}
+          try { items.push(await adminApi.getPromptTemplate(id)); } catch { /* 单个模板读取失败不影响其余模板 */ }
         }
       }
       setTemplates(items);
@@ -89,23 +91,23 @@ export default function PromptManager() {
       <Table dataSource={templates} columns={columns} rowKey="id" loading={loading} size="small" pagination={false} />
 
       {/* Edit modal */}
-      <Modal title={editing ? '编辑模板' : '添加模板'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} width={800}>
+      <Modal title={editing ? '编辑模板' : '添加模板'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} width={1100} styles={{ body: { maxHeight: '76vh', overflowY: 'auto' } }}>
         <Form form={form} layout="vertical">
           {!editing && <Form.Item name="id" label="ID" rules={[{ required: true }]}><Input placeholder="review.code" /></Form.Item>}
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input placeholder="代码审查" /></Form.Item>
-          <Form.Item name="systemPrompt" label="System Prompt"><TextArea rows={6} /></Form.Item>
-          <Form.Item name="userPrompt" label="User Prompt 模板"><TextArea rows={8} placeholder="支持 {{variable}} 占位符" /></Form.Item>
-          <Form.Item name="outputSchema" label="输出 Schema"><TextArea rows={4} placeholder='{"type":"json","schema": {...}}' /></Form.Item>
+          <Form.Item name="systemPrompt" label="System Prompt"><RichTextEditor label="System Prompt" /></Form.Item>
+          <Form.Item name="userPrompt" label="User Prompt 模板" extra="支持 {{anchor}}、{{sourceCode}} 等占位符；保存后在执行时替换。"><RichTextEditor label="User Prompt" /></Form.Item>
+          <Form.Item name="outputSchema" label="输出 Schema"><TextArea aria-label="输出 Schema" style={{ fontFamily: 'monospace' }} rows={4} placeholder='{"type":"json","schema": {...}}' /></Form.Item>
         </Form>
       </Modal>
 
       {/* Detail modal */}
-      <Modal title={`模板: ${viewing?.id}`} open={detailOpen} onCancel={() => setDetailOpen(false)} footer={null} width={800}>
+      <Modal title={`模板: ${viewing?.id}`} open={detailOpen} onCancel={() => setDetailOpen(false)} footer={null} width={1100} styles={{ body: { maxHeight: '76vh', overflowY: 'auto' } }}>
         {viewing && (
           <Tabs items={[
-            { key: 'system', label: 'System Prompt', children: <pre style={{ whiteSpace: 'pre-wrap', background: '#f5f5f5', padding: 12, borderRadius: 4 }}>{viewing.systemPrompt}</pre> },
-            { key: 'user', label: 'User Prompt', children: <pre style={{ whiteSpace: 'pre-wrap', background: '#f5f5f5', padding: 12, borderRadius: 4 }}>{viewing.userPrompt}</pre> },
-            { key: 'output', label: 'Output Schema', children: <pre style={{ whiteSpace: 'pre-wrap', background: '#f5f5f5', padding: 12, borderRadius: 4 }}>{viewing.outputSchema}</pre> },
+            { key: 'system', label: 'System Prompt', children: <RichTextEditor value={viewing.systemPrompt} readOnly label="systemPrompt" /> },
+            { key: 'user', label: 'User Prompt', children: <RichTextEditor value={viewing.userPrompt} readOnly label="userPrompt" /> },
+            { key: 'output', label: 'Output Schema', children: <pre style={{ whiteSpace: 'pre-wrap', background: palette.bgHover, padding: 12, borderRadius: 4 }}>{viewing.outputSchema}</pre> },
           ]} />
         )}
       </Modal>

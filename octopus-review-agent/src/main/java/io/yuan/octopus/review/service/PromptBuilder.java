@@ -34,7 +34,7 @@ public class PromptBuilder {
      */
     public String getSystemPrompt(Skill skill) {
         PromptTemplate template = promptManager.get(skill.getPromptTemplateId());
-        String system = template.systemPrompt();
+        String system = skill.enrichSystemPrompt(template.systemPrompt());
 
         // Append output schema as format instruction
         if (template.outputSchema() != null && !template.outputSchema().isBlank()) {

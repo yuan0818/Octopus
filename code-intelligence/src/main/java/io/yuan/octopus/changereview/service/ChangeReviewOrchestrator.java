@@ -58,6 +58,16 @@ public class ChangeReviewOrchestrator {
 
     private final String octopusBaseUrl;
 
+    /** Phase 1B：审查完成后自动发起业务回归（仅适用于 patchset 有预览/测试部署的团队，默认关闭）。 */
+    @Value("${octopus.change-review.regression.auto-trigger:false}")
+    private boolean regressionAutoTrigger;
+    private ChangeRegressionService regressionService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setRegressionService(ChangeRegressionService regressionService) {
+        this.regressionService = regressionService;
+    }
+
     public ChangeReviewOrchestrator(ChangeReviewTaskRepository taskRepository,
                                     RepoConfigService repoConfigService,
                                     GitService gitService,
@@ -268,7 +278,20 @@ public class ChangeReviewOrchestrator {
                     "Review completed but Gerrit comment writeback failed; result retained in Octopus. "
                             + "Re-run via /rewrite to retry only the writeback.");
         }
-        return complete(task);
+        ChangeReviewTask done = complete(task);
+        maybeTriggerRegression(done);
+        return done;
+    }
+
+    private void maybeTriggerRegression(ChangeReviewTask task) {
+        if (!regressionAutoTrigger || regressionService == null) return;
+        try {
+            Object batchId = regressionService.trigger(task.getId(), null, null).get("id");
+            log.info("Task {} triggered regression batch {}", task.getId(), batchId);
+        } catch (Exception e) {
+            // 回归是附加步骤：失败不影响审查结论
+            log.warn("Task {} regression trigger failed: {}", task.getId(), e.getMessage());
+        }
     }
 
     // ── State helpers ──

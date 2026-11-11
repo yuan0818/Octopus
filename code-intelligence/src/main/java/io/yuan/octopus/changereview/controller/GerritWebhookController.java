@@ -102,23 +102,32 @@ public class GerritWebhookController {
             return ResponseEntity.badRequest().body(Result.error(400, "incomplete payload"));
         }
 
-        // Match RepoConfig by platform=GERRIT + repoUrl containing project
-        Optional<RepoConfig> matched = repoConfigRepository
+        // Match RepoConfig by platform=GERRIT + exact project name.
+        // 子串查询只做数据库预筛，再按 URL 解析出的 project 名精确比对（避免 core 命中 platform-core）。
+        final String projectName = project;
+        List<RepoConfig> candidates = repoConfigRepository
                 .findByPlatformAndRepoUrlContaining("GERRIT", project)
-                .stream().findFirst();
-        if (matched.isEmpty()) {
+                .stream()
+                .filter(rc -> GerritProjectNames.matches(rc.getRepoUrl(), projectName))
+                .toList();
+        if (candidates.isEmpty()) {
             log.info("Gerrit event for unconfigured repo project={} ignored", project);
             return ResponseEntity.accepted().body(Result.success(Map.of("ignored", "repo not configured")));
         }
-        RepoConfig repoConfig = matched.get();
 
-        // Validate webhook secret (BR-CTR-002)
-        if (repoConfig.getWebhookSecretEncrypted() == null
-                || !tokenMatches(token, credentialEncryptor.decrypt(repoConfig.getWebhookSecretEncrypted()))) {
-            log.warn("Gerrit webhook token mismatch for project={}", project);
+        // Validate webhook secret (BR-CTR-002)。同一 project 配了多个分支/实例时，
+        // 取 secret 与 token 匹配的那一条，而不是任意第一条。
+        Optional<RepoConfig> matched = candidates.stream()
+                .filter(rc -> rc.getWebhookSecretEncrypted() != null
+                        && tokenMatches(token, decryptQuietly(rc)))
+                .findFirst();
+        if (matched.isEmpty()) {
+            log.warn("Gerrit webhook token mismatch for project={} ({} candidate config(s))",
+                    project, candidates.size());
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Result.error(401, "WEBHOOK_AUTH_FAILED"));
         }
+        RepoConfig repoConfig = matched.get();
 
         // Idempotency: same (change, patchset) already has a task → return existing (BR-CTR-049)
         Optional<ChangeReviewTask> existing = taskRepository
@@ -166,6 +175,16 @@ public class GerritWebhookController {
         // 常量时间比较，防时序侧信道
         return MessageDigest.isEqual(provided.getBytes(StandardCharsets.UTF_8),
                 expected.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** 解密失败（密钥轮换、脏数据）视为不匹配，不让单条坏配置把请求打成 500。 */
+    private String decryptQuietly(RepoConfig repoConfig) {
+        try {
+            return credentialEncryptor.decrypt(repoConfig.getWebhookSecretEncrypted());
+        } catch (RuntimeException e) {
+            log.warn("Cannot decrypt webhook secret of repo config {}: {}", repoConfig.getId(), e.getMessage());
+            return null;
+        }
     }
 
     private String truncate(String payload) {

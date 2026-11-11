@@ -200,4 +200,57 @@ class GerritWebhookControllerTest {
         verify(taskRepository).save(captor.capture());
         assertEquals("FAILED", captor.getValue().getStatus());
     }
+
+    // ── 精确匹配 project（M2）───────────────────────────────────
+
+    @Test
+    void shouldNotMatchRepoWhoseNameMerelyContainsProject() {
+        // DB 子串预筛会返回 test-repo-utils，但它不是 test-repo
+        RepoConfig similar = repoConfig();
+        similar.setRepoUrl("https://gerrit.example.com/a/test-repo-utils");
+        when(repoConfigRepository.findByPlatformAndRepoUrlContaining("GERRIT", "test-repo"))
+                .thenReturn(List.of(similar));
+
+        var resp = controller.handleGerrit(SECRET, validPayload());
+
+        assertEquals(202, resp.getStatusCode().value());
+        verifyNoInteractions(credentialEncryptor);
+        verifyNoInteractions(taskService);
+    }
+
+    @Test
+    void shouldPickCandidateWhoseSecretMatches() {
+        RepoConfig other = repoConfig();
+        other.setId(200L);
+        other.setWebhookSecretEncrypted("ENC-OTHER");
+        when(repoConfigRepository.findByPlatformAndRepoUrlContaining("GERRIT", "test-repo"))
+                .thenReturn(List.of(other, repoConfig()));
+        when(credentialEncryptor.decrypt("ENC-OTHER")).thenReturn("another-secret");
+        when(credentialEncryptor.decrypt("ENC")).thenReturn(SECRET);
+        when(taskRepository.findByRepoConfigIdAndChangeNumberAndPatchsetNumber(REPO_ID, "123", 2))
+                .thenReturn(Optional.empty());
+        when(taskService.createAndSupersede(any())).thenAnswer(inv -> {
+            ChangeReviewTask created = inv.getArgument(0);
+            created.setId(6L);
+            return created;
+        });
+
+        var resp = controller.handleGerrit(SECRET, validPayload());
+
+        assertEquals(202, resp.getStatusCode().value());
+        ArgumentCaptor<ChangeReviewTask> captor = ArgumentCaptor.forClass(ChangeReviewTask.class);
+        verify(taskService).createAndSupersede(captor.capture());
+        assertEquals(REPO_ID, captor.getValue().getRepoConfigId());
+    }
+
+    @Test
+    void shouldTreatUndecryptableSecretAsMismatch() {
+        when(repoConfigRepository.findByPlatformAndRepoUrlContaining("GERRIT", "test-repo"))
+                .thenReturn(List.of(repoConfig()));
+        when(credentialEncryptor.decrypt("ENC")).thenThrow(new RuntimeException("bad key"));
+
+        var resp = controller.handleGerrit(SECRET, validPayload());
+
+        assertEquals(401, resp.getStatusCode().value());
+    }
 }

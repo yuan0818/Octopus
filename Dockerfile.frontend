@@ -4,6 +4,9 @@ COPY octopus-frontend/dist /usr/share/nginx/html
 # Default: API runs locally on host → host.docker.internal:8080
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 EXPOSE 3000
-# envsubst replaces ${API_HOST} and nginx-docker's entrypoint runs envsubst automatically
+# envsubst replaces ${API_HOST} / ${REVIEW_HOST} / ${SCENARIO_HOST} / ${RECONSTRUCT_HOST} and nginx-docker's entrypoint runs envsubst automatically
 # when templates are placed in /etc/nginx/templates/
-ENV API_HOST=host.docker.internal:8080
+ENV API_HOST=host.docker.internal:8080 \
+    REVIEW_HOST=host.docker.internal:8083 \
+    SCENARIO_HOST=host.docker.internal:8086 \
+    RECONSTRUCT_HOST=host.docker.internal:8082

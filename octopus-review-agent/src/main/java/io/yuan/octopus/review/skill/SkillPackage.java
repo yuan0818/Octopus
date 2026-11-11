@@ -58,7 +58,7 @@ public class SkillPackage {
     /** Convert to a standard Skill for execution. */
     public Skill toSkill() {
         String promptId = "pkg:" + id + "@" + version;
-        return new Skill(id, name, description, promptId, preferredProvider, "auto", maxTokens, true);
+        return new Skill(id, name, description, promptId, preferredProvider, "auto", maxTokens, true, "", references);
     }
 
     public String getId() { return id; }

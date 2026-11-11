@@ -1,0 +1,41 @@
+/* 由 src/theme.ts 的 palette 同步（tests/theme-tokens.test.mjs 校验一致性）。CSS 中请使用这些变量，不要写死颜色。 */
+:root {
+  --oct-primary: #1677ff;
+  --oct-primary-light: #69b1ff;
+  --oct-primary-border: #91caff;
+  --oct-primary-bg: #e6f4ff;
+  --oct-success: #52c41a;
+  --oct-success-text: #389e0d;
+  --oct-success-border: #b7eb8f;
+  --oct-success-bg: #f6ffed;
+  --oct-success-light: #95de64;
+  --oct-warning: #faad14;
+  --oct-warning-bg: #fff7e6;
+  --oct-orange: #fa8c16;
+  --oct-volcano: #ff7a45;
+  --oct-error: #ff4d4f;
+  --oct-error-text: #cf1322;
+  --oct-error-border: #ffccc7;
+  --oct-error-bg: #fff2f0;
+  --oct-purple: #722ed1;
+  --oct-purple-bg: #f9f0ff;
+  --oct-cyan: #13c2c2;
+  --oct-cyan-bg: #e6fffb;
+  --oct-text: #333333;
+  --oct-text-secondary: #666666;
+  --oct-text-tertiary: #999999;
+  --oct-text-quaternary: #cccccc;
+  --oct-border: #d9d9d9;
+  --oct-border-subtle: #f0f0f0;
+  --oct-bg-subtle: #fafafa;
+  --oct-bg-hover: #f5f5f5;
+  --oct-bg-container: #ffffff;
+  --oct-text-on-dark: #ffffff;
+  --oct-code-bg: #1e1e1e;
+  --oct-code-text: #d4d4d4;
+  --oct-diff-added-bg: #e6ffec;
+  --oct-diff-added-text: #1a7f37;
+  --oct-diff-removed-bg: #ffebe9;
+  --oct-diff-removed-text: #cf222e;
+  --oct-color-text-base: #1f1f1f;
+}

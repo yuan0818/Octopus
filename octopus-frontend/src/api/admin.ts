@@ -27,6 +27,9 @@ export const adminApi = {
   updateModel(name: string, config: any): Promise<void> { return unwrap(http.put(`/admin/models/${name}`, config)); },
   deleteModel(name: string): Promise<void> { return unwrap(http.delete(`/admin/models/${name}`)); },
   toggleModel(name: string): Promise<void> { return unwrap(http.post(`/admin/models/${name}/toggle`)); },
+  testModel(name: string): Promise<{ success: boolean; message: string; elapsedMs: number; detail: Record<string, unknown> }> {
+    return unwrap(http.post(`/admin/models/${name}/test`, undefined, { timeout: 190000 }));
+  },
 
   // ── Prompts ──
   getPromptTemplates(): Promise<string[]> { return unwrap(http.get('/admin/prompts')); },
