@@ -19,11 +19,13 @@ GIT_PASSWORD=dummy OCTOPUS_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef \
 cd octopus-frontend && npm install && npm run dev   # frontend :3000
 ```
 
+**Or start everything with one command (local dev)**: `./dev-start.sh` brings up the infrastructure, every backend service (8080–8086) and the frontend; `--no-build` skips the build, `--no-infra` skips the containers, and logs go to `logs/`. If `OCTOPUS_ENCRYPTION_KEY` is unset it generates a local dev key (not for production). `./dev-stop.sh` stops everything (add `--infra` to stop the containers too).
+
 **First analysis** — open <http://localhost:3000> and submit a local directory on the Analysis page, or:
 
 ```bash
 curl -X POST http://localhost:8080/api/analysis/local \
-  -H 'Content-Type: application/json" \
+  -H 'Content-Type: application/json' \
   -d '{"projectPath": "/path/to/your/repo"}'
 ```
 
@@ -37,10 +39,14 @@ curl -X POST http://localhost:8080/api/analysis/local \
 | `/query/class`, `/query/endpoints` | class detail, entry list |
 | `/admin` | models (API format + encrypted keys), prompts, skills, requirement sources (Jira) |
 | `/analysis` | task status / steps / retry; multi-branch versions stay queryable |
+| `/repos` | repository configuration and Git sync |
+| `/business-testing` | API assets, project context, business-flow canvas (AI whole-chain completion), DSL, JMeter extensions, batch regression → compile JMX and run |
+| `/background` | query repository background by project/module/commit; schedule LLM repository analysis and browse task history |
+| `/scenarios` (legacy) | early scenario-editor prototype, kept for compatibility; use Business API Testing for new work |
 
 **Before reviewing**: register at least one LLM model on the Admin page (Base URL / account / API key / API format — OpenAI-compatible or Claude).
 
-**Ports**: 3000 frontend · 8080 backend · 8082 source reconstruct (git slicing) · 8083 review-agent · 8377 JVM analyzer · 8378 Go analyzer · 3306/7687/5672 MySQL/Neo4j/RabbitMQ
+**Ports**: 3000 frontend · 8080 backend · 8081 git service · 8082 source reconstruct (git slicing) · 8083 review-agent · 8084 repo config (code-base) · 8085 analysis scheduler · 8086 business testing (scenario-runner) · 8377 JVM analyzer · 8378 Go analyzer · 3306/7687/5672 MySQL/Neo4j/RabbitMQ
 
 ---
 
@@ -69,7 +75,8 @@ Agent tools like Claude Code, Cursor, and Codex — plus tree-sitter based solut
 ┌──────────────────────────────────────────────────────────────────┐
 │  octopus-frontend (React 19, Port 3000)                         │
 │  Dashboard · Analysis · Change Summary · Review(+Follow-up)    │
-│  Review History · Code Query(callgraph/class/entry) · Admin    │
+│  Review History · Code Query(callgraph/class/entry) · Repos    │
+│  Background · Business API Testing(flow/DSL/ext/regr) · Admin  │
 └──────────────────────────┬───────────────────────────────────────┘
                            │ HTTP
                            ▼
@@ -111,6 +118,12 @@ Agent tools like Claude Code, Cursor, and Codex — plus tree-sitter based solut
 │  summary + Jira requirement source (SPI) + model management      │
 │  (API format / AES-GCM encrypted API keys)                       │
 └──────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│  octopus-scenario-runner (Business API Testing, Port 8086)       │
+│  flow → Test IR → JMX → JMeter 5.6.3 CLI + octopus-jmeter-ext    │
+│  YAML DSL · case generation · repo background · batch regression │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ![Call Graph Visualization](images/image3.png)
@@ -125,7 +138,11 @@ Agent tools like Claude Code, Cursor, and Codex — plus tree-sitter based solut
 | **octopus-git** | Git operations microservice | 8081 |
 | **octopus-code-reconstruct** | Call-chain source restoration (git blob line slicing + batch coordinate fetch) | 8082 |
 | **octopus-review-agent** | AI Code Review (Skill engine / follow-up chat / change summary / requirement source SPI) | 8083 |
-| **octopus-analysis-scheduler** | Scheduled/batch analysis dispatch (RabbitMQ) | — |
+| **octopus-analysis-scheduler** | Scheduled/batch analysis dispatch (RabbitMQ) | 8085 |
+| **octopus-scenario-runner** | Business API testing: business flows and Test IR, JMX compilation run by JMeter, YAML DSL, case generation (Planner/Observer/Operator), repository background orchestration, batch regression ([BUSINESS_TESTING.md](octopus-scenario-runner/BUSINESS_TESTING.md), Chinese) | 8086 |
+| **octopus-jmeter-ext** | JMeter extension: read-only data checks (MySQL/PostgreSQL/Redis/Kafka) and request encryption/signing, executed inside the JMeter process ([README](octopus-jmeter-ext/README.md)) | — |
+| **octopus-jmeter-sdk** | SDK for JMeter function extensions: declare metadata with `@OctopusTool` and friends, upload the JAR, and it registers as a tool discoverable by people and LLMs ([README](octopus-jmeter-sdk/README.md)) | — |
+| **octopus-code-base** | Repository config and Git sync (shares the `repo_config` table with code-intelligence, adding only nullable columns); slated to merge into code-intelligence | 8084 |
 | **octopus-infra/\*** | Shared infrastructure (bom/common/mysql/neo4j/jgit/memory) | — |
 | **octopus-frontend** | React SPA | 3000 |
 
@@ -220,6 +237,19 @@ When a path is associated with a requirement, the source of each method along th
 
 A dedicated **Change Summary** page: one entry point + two versions (any branch/commit/tag combination, cross-branch supported). Under the hood, `entry-chain-diff` diffs the chain member sets of both versions, and **common members' source texts are re-sliced from git blobs via method_info coordinates** (git is the single source of truth for code content; `gitBacked` flags provenance). An LLM then produces structured **change highlights + test points** — deriving test scenarios and regression points from the diff.
 
+### 4.5 Business API Testing
+
+Extends impact analysis into executable regression: import API contracts (OpenAPI 3 / analyzed entry points), lay out a strictly linear business flow (Given-When-Then) on a canvas, confirm the version and business expectations, then compile a fixed Test IR and JMX that an external JMeter 5.6.3 executes, reporting PASS / FAIL / INCONCLUSIVE per node. Design and implemented scope: [BUSINESS_TESTING.md](octopus-scenario-runner/BUSINESS_TESTING.md) (Chinese).
+
+- **Project context + LLM whole-chain completion**: project/module background, test environments and encrypted connection credentials; after a human lays out the path, the LLM completes the chain node by node in dependency order, with pause, retry, and a single review-and-apply of step memories. Checkpoints are persisted encrypted, so tasks resume after a page refresh or service restart. See [Project context & LLM flow](octopus-scenario-runner/BUSINESS_CONTEXT.md) (Chinese).
+- **YAML DSL**: declarative `call / with / as / expect / wait / poll`, translated deterministically by rules into a linear business flow; anything missing is listed as pending rather than guessed. No branches or loops; polling only for APIs the user explicitly authorizes ([requirements](octopus-scenario-runner/DSL_REQUIREMENTS.md), [implementation plan](octopus-scenario-runner/DSL_IMPLEMENTATION_PLAN.md), Chinese).
+- **Data checks & extensions**: `octopus-jmeter-ext` runs read-only database / Redis / Kafka checks and request encryption/signing inside JMeter; custom functions are written with `octopus-jmeter-sdk`, uploaded as a JAR, and registered as tools the LLM can discover and call.
+- **Repository background analysis**: the Background page has an LLM read a repository at a given commit in stages (plan → per-item evidence → synthesis), producing queryable, resumable module background used by step completion ([details](octopus-scenario-runner/REPOSITORY_ORCHESTRATION.md), Chinese).
+
+### 4.6 Gerrit Change Regression
+
+A Gerrit change-review task can feed batch business regression: after deploying to the test environment, CI calls `POST /api/change-review/{taskId}/regression`, which starts a batch regression on scenario-runner using the change's base / merge commits. When the batch finishes, scenario-runner calls back `POST /api/change-review/regression-callback` (verified with the shared `OCTOPUS_REGRESSION_CALLBACK_TOKEN`), and the result summary is posted as a comment on the Gerrit change. If patchsets have preview environments, enable `octopus.change-review.regression.auto-trigger` to start regression automatically when review completes.
+
 ---
 
 ## 5. Deployment & Quick Start
@@ -308,11 +338,18 @@ Hybrid mode (Git service + frontend in Docker; backend + PSI on host):
 docker compose up -d
 ```
 
-Full container mode:
+Full container mode (JVM analyzer + backend + frontend in containers; MySQL/Neo4j/RabbitMQ, review-agent, reconstruct and scenario-runner stay on the host by default and are reached via `host.docker.internal`):
 
 ```bash
+export OCTOPUS_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef   # required; compose fails fast without it
 docker compose -f docker-compose.yml -f docker-compose.jvm-analyzer.yml up -d
 ```
+
+Every dependency address can be overridden: the backend reads `MYSQL_HOST` / `NEO4J_URI` / `RABBITMQ_HOST` / `REVIEW_AGENT_URL` / `RECONSTRUCT_URL`; the frontend nginx reads `REVIEW_HOST` / `SCENARIO_HOST` / `RECONSTRUCT_HOST`.
+
+### Continuous Integration
+
+`.github/workflows/ci.yml` runs on pushes to main and on PRs: backend unit tests (with MySQL / Neo4j service containers), Go analyzer tests, and frontend type-check / lint / unit tests / build. jvm-project-analyzer needs a ~1.1 GB IDEA download and is excluded; `psi-golden.yml` runs nightly (or manually) to check PSI extraction against the sample projects in `jvm-project-analyzer/golden/`.
 
 ### Key Environment Variables
 
@@ -324,6 +361,11 @@ docker compose -f docker-compose.yml -f docker-compose.jvm-analyzer.yml up -d
 | `OCTOPUS_ENCRYPTION_KEY` | — | AES-GCM key (Git credentials + review-agent model API keys at rest; must stay stable — rotating makes stored ciphertext undecryptable) |
 | `OCTOPUS_GO_ROUTER_PKGS` | built-in default | Go router framework package whitelist (comma-separated, framework profile) |
 | `OCTOPUS_REPO_ROOT` | `/data/repos` | Repository storage root — shared at the same path by every repo-reading service (git/PSI/Go/reconstruct; single writer = GitService, others read-only); point it at a writable dir on macOS |
+| `OCTOPUS_LOCAL_ALLOWED_ROOTS` | empty (no restriction) | Comma-separated allowlist of local directories that may be analyzed; set it for any shared deployment |
+| `OCTOPUS_ANALYSIS_MAX_CONCURRENT` | `2` | Maximum concurrent analysis pipelines |
+| `OCTOPUS_REGRESSION_CALLBACK_TOKEN` | empty | Callback token shared by code-intelligence and scenario-runner; when set, batch regression results are posted back to Gerrit |
+| `SCENARIO_RUNNER_URL` | `http://localhost:8086` | code-intelligence → scenario-runner base URL (starts batch regression) |
+| `OCTOPUS_DDL_AUTO` | `update` | Hibernate schema strategy; use `validate` in production and manage the schema with migration scripts |
 | `QUERY_SERVICE_URL` | `http://localhost:8080` | review-agent → code-intelligence base URL (change summary fetches chain diff) |
 
 ---

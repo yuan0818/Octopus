@@ -19,6 +19,8 @@ GIT_PASSWORD=dummy OCTOPUS_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef \
 cd octopus-frontend && npm install && npm run dev   # 前端 :3000
 ```
 
+**或一键启动（本地开发）**：`./dev-start.sh` 拉起基础设施、全部后端服务（8080–8086）与前端；`--no-build` 跳过构建，`--no-infra` 跳过容器，日志在 `logs/`。未设置 `OCTOPUS_ENCRYPTION_KEY` 时自动生成本地开发密钥（勿用于生产）。`./dev-stop.sh` 停止（加 `--infra` 同时停止容器）。
+
 **发起第一次分析**——打开 <http://localhost:3000> 在"分析任务"页提交本地目录，或：
 
 ```bash
@@ -37,10 +39,14 @@ curl -X POST http://localhost:8080/api/analysis/local \
 | `/query/class`、`/query/endpoints` | 类详情、入口列表 |
 | `/admin` Agent 配置 | 模型管理（API 格式 + 密钥加密存储）、Prompt、Skill、需求源（Jira） |
 | `/analysis` 分析任务 | 分析状态 / 步骤 / 重试；多分支分析后版本随时可查 |
+| `/repos` 仓库管理 | 仓库配置与 Git 同步 |
+| `/business-testing` 业务 API 测试 | 接口资产、项目背景、业务流程画布（AI 整链补全）、DSL、JMeter 扩展、批量回归 → 编译 JMX 并执行 |
+| `/background` 背景知识 | 按项目/模块/提交查询仓库背景；调度 LLM 仓库背景分析，查看任务历史 |
+| `/scenarios` 场景（旧版原型） | 早期场景编辑原型，保留兼容；新功能请用业务 API 测试 |
 
 **审查前置**：在 Agent 配置页注册至少一个 LLM 模型（Base URL / 账号 / API Key / API 格式——OpenAI 兼容或 Claude）。
 
-**端口一览**：3000 前端 · 8080 后端 · 8082 源码还原（git 切片）· 8083 review-agent · 8377 JVM 分析 · 8378 Go 分析 · 3306/7687/5672 MySQL/Neo4j/RabbitMQ
+**端口一览**：3000 前端 · 8080 后端 · 8081 Git 服务 · 8082 源码还原（git 切片）· 8083 review-agent · 8084 仓库配置（code-base）· 8085 分析调度 · 8086 业务测试（scenario-runner）· 8377 JVM 分析 · 8378 Go 分析 · 3306/7687/5672 MySQL/Neo4j/RabbitMQ
 
 ---
 
@@ -69,7 +75,8 @@ Claude Code、Cursor、Codex 等 Agent 工具，以及 GitHub Code Navigation、
 ┌──────────────────────────────────────────────────────────────────┐
 │  octopus-frontend (React 19, Port 3000)                         │
 │  Dashboard · 分析任务 · 变更总结 · Code Review(+追问) · 审查历史  │
-│  代码查询(调用图/类详情/入口) · 仓库管理 · Agent 配置             │
+│  代码查询(调用图/类详情/入口) · 仓库管理 · 背景知识              │
+│  业务 API 测试(流程/DSL/扩展/回归) · Agent 配置                  │
 └──────────────────────────┬───────────────────────────────────────┘
                            │ HTTP
                            ▼
@@ -110,6 +117,12 @@ Claude Code、Cursor、Codex 等 Agent 工具，以及 GitHub Code Navigation、
 │  Skill 引擎 + 结构化审查 + 追问对话 + 变更总结 + Jira 需求源     │
 │  + 需求源 SPI + 模型管理（API 格式/AES-GCM 密钥加密）             │
 └──────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│  octopus-scenario-runner (业务 API 测试, Port 8086)               │
+│  业务流程 → Test IR → JMX → JMeter 5.6.3 CLI + octopus-jmeter-ext │
+│  YAML DSL · 用例生成 · 仓库背景分析编排 · 批量回归                │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ![调用图可视化](images/image3.png)
@@ -125,8 +138,9 @@ Claude Code、Cursor、Codex 等 Agent 工具，以及 GitHub Code Navigation、
 | **octopus-code-reconstruct** | 调用路径源码还原（git blob 按行切片 + 批量坐标取源） | 8082 |
 | **octopus-review-agent** | AI Code Review（Skill 引擎/追问对话/变更总结/需求源 SPI） | 8083 |
 | **octopus-analysis-scheduler** | 定时/批量分析调度（RabbitMQ） | — |
-| **octopus-scenario-runner** | 场景化 API 测试（Tool Registry / Runner） | 8086 |
-| **octopus-jmeter-ext** | JMeter 扩展：前置数据准备与结果校验（DB/Redis/Kafka），由 scenario-runner 嵌入执行 | — |
+| **octopus-scenario-runner** | 业务 API 测试：业务流程与 Test IR、编译 JMX 并调用 JMeter 执行、YAML DSL、用例生成（Planner/Observer/Operator）、仓库背景分析编排、批量回归（[BUSINESS_TESTING.md](octopus-scenario-runner/BUSINESS_TESTING.md)） | 8086 |
+| **octopus-jmeter-ext** | JMeter 扩展：数据验证（MySQL/PostgreSQL/Redis/Kafka 只读）与请求加密/签名预处理，在 JMeter 进程内执行（[README](octopus-jmeter-ext/README.md)） | — |
+| **octopus-jmeter-sdk** | JMeter 函数扩展 SDK：用 `@OctopusTool` 等注解声明元数据，打包 JAR 上传后注册为人与 LLM 可发现的工具（[README](octopus-jmeter-sdk/README.md)） | — |
 | **octopus-code-base** | 仓库配置与 Git 同步（与 code-intelligence 共享 `repo_config` 表，仅附加 nullable 列）；计划并入 code-intelligence | 8084 |
 | **octopus-infra/\*** | 共享基础设施（bom/common/mysql/neo4j/jgit/memory） | — |
 | **octopus-frontend** | React SPA | 3000 |
@@ -219,6 +233,20 @@ AnalysisDispatcher.detectAnalyzer(projectRoot)   （无构建文件目录回退 
 ### 4.4 变更总结（跨版本对比）
 
 独立的「变更总结」页面：同一入口 + 两个版本（分支/commit/tag 任意组合，可跨分支），底层 `entry-chain-diff` 枚举两版链路成员集合做差集，**共同成员的源码文本按 method_info 坐标从 git blob 重新切片对比**（git 为源码内容唯一真相，`gitBacked` 标注来源），再由 LLM 产出结构化的**修改要点 + 测试要点**——从变更推导测试场景与回归点。
+
+### 4.5 业务 API 测试
+
+把影响分析延伸到可执行的回归：导入接口契约（OpenAPI 3 / 已分析的入口），在画布上人工编排严格线性的业务流程（Given-When-Then），确认版本与业务预期后编译为固定的 Test IR 与 JMX，由外部 JMeter 5.6.3 执行，逐节点给出 PASS / FAIL / INCONCLUSIVE。设计与已实现范围见 [BUSINESS_TESTING.md](octopus-scenario-runner/BUSINESS_TESTING.md)。
+
+业务 API 测试支持项目/模块背景、测试环境和加密连接凭据，以及基于人工编排路径的 LLM 整链补全：一次启动后按节点状态自动推进，支持暂停、重试和统一应用步骤记忆。任务检查点加密持久化，页面刷新或服务中断后可恢复，并展示失败原因、处理建议和错误历史。也可单独补全当前步骤。使用方式、凭据规则和增量迁移见 [项目背景与 LLM Flow](octopus-scenario-runner/BUSINESS_CONTEXT.md)。
+
+- **YAML DSL**：声明式 `call / with / as / expect / wait / poll`，按规则确定性地翻译为线性业务流程；缺失项列为待补充而不猜测。不支持分支与循环，轮询仅限使用者显式授权的 API（[需求规格](octopus-scenario-runner/DSL_REQUIREMENTS.md)、[实施计划](octopus-scenario-runner/DSL_IMPLEMENTATION_PLAN.md)）。
+- **数据验证与扩展**：`octopus-jmeter-ext` 在 JMeter 内执行数据库 / Redis / Kafka 只读验证和请求加密、签名预处理；自定义函数用 `octopus-jmeter-sdk` 编写并以 JAR 上传，注册为 LLM 可发现、可调用的工具。
+- **仓库背景分析**：「背景知识」页由 LLM 分阶段（规划 → 分项取证 → 归纳）阅读指定提交的仓库，生成可查询、可断点续跑的模块背景，供步骤补全使用（[说明](octopus-scenario-runner/REPOSITORY_ORCHESTRATION.md)）。
+
+### 4.6 Gerrit 变更回归
+
+Gerrit 变更审查任务可以接入批量业务回归：CI 在部署到测试环境之后调用 `POST /api/change-review/{taskId}/regression`，用该变更的 base / merge commit 在 scenario-runner 上发起批量回归；批次结束后回调 `POST /api/change-review/regression-callback`（校验共享的 `OCTOPUS_REGRESSION_CALLBACK_TOKEN`），把结果摘要以评论回写到 Gerrit change。若 patchset 有预览环境，可开启 `octopus.change-review.regression.auto-trigger`，在审查完成后自动发起。
 
 ---
 
@@ -317,6 +345,10 @@ docker compose -f docker-compose.yml -f docker-compose.jvm-analyzer.yml up -d
 
 依赖服务地址都可用环境变量覆盖：后端用 `MYSQL_HOST` / `NEO4J_URI` / `RABBITMQ_HOST` / `REVIEW_AGENT_URL` / `RECONSTRUCT_URL`，前端 nginx 用 `REVIEW_HOST` / `SCENARIO_HOST` / `RECONSTRUCT_HOST`。
 
+### 持续集成
+
+`.github/workflows/ci.yml` 在推送到 main 和提交 PR 时运行：后端单元测试（含 MySQL / Neo4j 服务容器）、Go 分析器测试、前端类型检查 / lint / 单测 / 构建。jvm-project-analyzer 需要下载约 1.1 GB 的 IDEA，不在其中；`psi-golden.yml` 每晚（或手动）用 `jvm-project-analyzer/golden/` 的样例工程校验 PSI 抽取结果。
+
 ### 关键环境变量
 
 | 变量 | 默认值 | 说明 |
@@ -337,8 +369,6 @@ docker compose -f docker-compose.yml -f docker-compose.jvm-analyzer.yml up -d
 ---
 
 ## 6. 关键设计权衡（Trade-offs）
-
-业务 API 测试支持项目/模块背景、测试环境和加密连接凭据，以及基于人工编排路径的 LLM 整链补全：一次启动后按节点状态自动推进，支持暂停、重试和统一应用步骤记忆。任务检查点加密持久化，页面刷新或服务中断后可恢复，并展示失败原因、处理建议和错误历史。也可单独补全当前步骤。使用方式、凭据规则和增量迁移见 [项目背景与 LLM Flow](octopus-scenario-runner/BUSINESS_CONTEXT.md)。
 
 架构文档记录结论，这里记录**为什么**——每个关键决策的另一面是什么、接受它换来了什么。
 
