@@ -89,8 +89,9 @@ class GoProjectAnalyzerTest {
 
         assertEquals(2, modules.size());
         DiscoveredProject first = modules.get(0);
-        assertEquals("svc", first.projectName());
-        assertEquals(List.of(svc), first.sourceDirectories());
+        assertEquals("lib", first.projectName());
+        assertEquals(List.of(lib), first.sourceDirectories());
+        assertEquals("svc", modules.get(1).projectName());
         assertNull(first.buildTool());
         assertNull(first.javaVersion());
     }

@@ -105,6 +105,7 @@ public class GoProjectAnalyzer implements ProjectAnalyzer {
             walk.filter(Files::isDirectory)
                     .filter(this::isScannableDir)
                     .filter(this::hasGoMod)
+                    .sorted() // Files.walk order is filesystem-dependent; keep scans deterministic
                     .forEach(dir -> modules.add(createGoProject(dir)));
         } catch (IOException e) {
             log.error("Failed to scan for Go modules under {}: {}", root, e.getMessage());
