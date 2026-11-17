@@ -37,6 +37,11 @@ class PollChecksTest {
         // 旧流程 / IR 的 hash 不能因为新增可选字段而改变
         String json = TestingJson.canonical(step(null));
         assertFalse(json.contains("poll"));
-        assertTrue(TestingJson.canonical(step(new Poll(500, 5000))).contains("\"poll\":{\"intervalMillis\":500,\"timeoutMillis\":5000}"));
+        // canonical() 会把整数规范成 5E+2 这类形式（已写入既有 hash，不能改），因此按数值比较而非字符串
+        var poll = com.google.gson.JsonParser.parseString(TestingJson.canonical(step(new Poll(500, 5000))))
+                .getAsJsonObject().getAsJsonObject("poll");
+        assertEquals(500, poll.get("intervalMillis").getAsLong());
+        assertEquals(5000, poll.get("timeoutMillis").getAsLong());
+        assertFalse(poll.has("authorizationRef"));
     }
 }

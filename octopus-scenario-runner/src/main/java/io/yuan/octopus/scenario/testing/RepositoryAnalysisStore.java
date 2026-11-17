@@ -3,6 +3,7 @@ import static io.yuan.octopus.scenario.testing.TestingJson.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.function.Consumer;
 
@@ -37,7 +38,7 @@ public class RepositoryAnalysisStore {
         var row=new RepositoryBackgroundAdoption();row.id=scope;
         var candidate=summaries().stream().filter(t->RepositoryAnalysisService.id(new RepositoryAnalysisService.Request(t.repositoryKey(),t.branch(),t.commitId(),null,"" )).equals(scope))
                 .filter(t->"READY".equals(t.state())).map(t->task(t.taskId()).run()).filter(r->r.report!=null).findFirst().orElse(null);
-        if(candidate!=null){row.taskId=RepositoryAnalysisTasks.taskId(candidate);row.adoptedAt=Instant.parse(candidate.updatedAt);}
+        if(candidate!=null){row.taskId=RepositoryAnalysisTasks.taskId(candidate);row.adoptedAt=Instant.parse(candidate.updatedAt).truncatedTo(ChronoUnit.MICROS);}
         adoptions.saveAndFlush(row);
     }
     public record Adopted(RepositoryAnalysisService.Run run,String adoptedAt) {}
@@ -54,7 +55,7 @@ public class RepositoryAnalysisStore {
         var run=task(taskId).run();
         IrValidator.require("READY".equals(run.state) && run.report!=null,"只能采用已完成且具有完整报告的分析任务");
         var row=adoptions.findById(scope).orElseGet(RepositoryBackgroundAdoption::new);row.id=scope;
-        if(!taskId.equals(row.taskId)){row.taskId=taskId;row.adoptedAt=Instant.now();adoptions.saveAndFlush(row);}
+        if(!taskId.equals(row.taskId)){row.taskId=taskId;row.adoptedAt=Instant.now().truncatedTo(ChronoUnit.MICROS);adoptions.saveAndFlush(row);}
         return new Adopted(run,row.adoptedAt.toString());
     }
     public RepositoryAnalysisService.Run get(String id){return repository.findById(id).map(this::decode).orElse(null);}

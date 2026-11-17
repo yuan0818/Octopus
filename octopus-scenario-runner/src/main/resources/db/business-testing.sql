@@ -184,6 +184,7 @@ CREATE TABLE IF NOT EXISTS business_tool_extension (
     INDEX idx_bt_extension_status (status)
 );
 
+-- 不用前缀索引 path(191)：H2（集成测试）不支持；MySQL 8 下整列索引仍在 3072 字节上限内
 CREATE TABLE IF NOT EXISTS business_poll_authorization (
     id VARCHAR(36) PRIMARY KEY,
     version BIGINT NOT NULL DEFAULT 0,
@@ -201,7 +202,7 @@ CREATE TABLE IF NOT EXISTS business_poll_authorization (
     created_at DATETIME(6) NOT NULL,
     updated_by VARCHAR(128),
     updated_at DATETIME(6) NOT NULL,
-    INDEX idx_bt_poll_api (project_id, http_method, path(191))
+    INDEX idx_bt_poll_api (project_id, http_method, path)
 );
 
 CREATE TABLE IF NOT EXISTS business_dsl_source (
