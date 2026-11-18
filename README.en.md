@@ -8,18 +8,28 @@
 
 ## 0. Quick Reference
 
-**Full stack in five minutes** (prerequisites in §5; `OCTOPUS_ENCRYPTION_KEY` must be 16/24/32 bytes):
+**Core pipeline in five minutes** (analysis + query; prerequisites in §5; `OCTOPUS_ENCRYPTION_KEY` must be 16/24/32 bytes):
 
 ```bash
 docker compose -f docker-compose.infra.yml up -d    # MySQL + Neo4j + RabbitMQ
-./run-jvm-analyzer-local.sh                         # JVM analyzer :8377 (slow first start)
+./run-jvm-analyzer-local.sh                         # JVM analyzer :8377 (needs a local IntelliJ IDEA 2025.3; slow first start)
 ./run-go-analyzer-local.sh                          # Go analyzer :8378 (seconds)
 GIT_PASSWORD=dummy OCTOPUS_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef \
   ./gradlew :code-intelligence:bootRun              # backend :8080
 cd octopus-frontend && npm install && npm run dev   # frontend :3000
 ```
 
+This starts only code-intelligence. Code Review, change summary and Business API Testing also need review-agent (8083), source reconstruct (8082) and scenario-runner (8086); the one-command start below is the easiest way to get them.
+
 **Or start everything with one command (local dev)**: `./dev-start.sh` brings up the infrastructure, every backend service (8080–8086) and the frontend; `--no-build` skips the build, `--no-infra` skips the containers, and logs go to `logs/`. If `OCTOPUS_ENCRYPTION_KEY` is unset it generates a local dev key (not for production). `./dev-stop.sh` stops everything (add `--infra` to stop the containers too).
+
+**Before using Business API Testing the first time**: scenario-runner does not create its tables (`ddl-auto: none`), so run the schema script against MySQL once. Executing tests also needs Apache JMeter 5.6.3 (`JMETER_HOME`; `dev-start.sh` defaults it to `data/tools/apache-jmeter-5.6.3`).
+
+```bash
+# Run once on a fresh database (octopus-mysql is the container from docker-compose.infra.yml); existing databases apply the incremental scripts in db/migrations/ per BUSINESS_TESTING.md
+docker exec -i octopus-mysql mysql -uroot -proot octopus \
+  < octopus-scenario-runner/src/main/resources/db/business-testing.sql
+```
 
 **First analysis** — open <http://localhost:3000> and submit a local directory on the Analysis page, or:
 
@@ -34,14 +44,14 @@ curl -X POST http://localhost:8080/api/analysis/local \
 | Page | Use |
 |------|-----|
 | `/change-summary` | entry + two versions (any branch/commit/tag combo) → change highlights + test points |
-| `/review` | Jira ticket / document / manual requirements → structured review → follow-up chat |
+| `/review` | Jira ticket / document / manual requirements → structured review → follow-up chat; `/review/history` for past reviews |
 | `/query/callgraph` | entry browsing (API first), call chains / up-downstream / impact paths |
 | `/query/class`, `/query/endpoints` | class detail, entry list |
 | `/admin` | models (API format + encrypted keys), prompts, skills, requirement sources (Jira) |
 | `/analysis` | task status / steps / retry; multi-branch versions stay queryable |
 | `/repos` | repository configuration and Git sync |
-| `/business-testing` | API assets, project context, business-flow canvas (AI whole-chain completion), DSL, JMeter extensions, batch regression → compile JMX and run |
-| `/background` | query repository background by project/module/commit; schedule LLM repository analysis and browse task history |
+| `/business-testing` | API assets, project context, business-flow canvas (AI whole-chain completion) → compile JMX and run; sub-pages `/dsl` DSL workbench, `/extensions` JMeter extensions & functions, `/regressions` batch regression, `/repository-analysis` repository background analysis |
+| `/background` | query repository background by project/module/commit (`/background/query`); schedule LLM repository analysis (`/background/analysis`) and browse task history (`/background/tasks`) |
 | `/scenarios` (legacy) | early scenario-editor prototype, kept for compatibility; use Business API Testing for new work |
 
 **Before reviewing**: register at least one LLM model on the Admin page (Base URL / account / API key / API format — OpenAI-compatible or Claude).
@@ -258,9 +268,11 @@ A Gerrit change-review task can feed batch business regression: after deploying 
 
 - Java 21+
 - Docker or Podman (any compose-compatible runtime; examples use docker)
-- Node.js 20+
+- Node.js 20.19+ or 22.12+ (required by Vite 8)
 - Git
-- Go >= 1.24 (only for analyzing Go projects)
+- Go >= 1.26 (only for analyzing Go projects; see `go-project-analyzer/go.mod`)
+- IntelliJ IDEA 2025.3 (only to run the JVM analyzer locally; container mode downloads it at image build time)
+- Apache JMeter 5.6.3 (only to execute Business API tests; compiling / downloading JMX does not need it)
 
 ### Start Infrastructure (MySQL + Neo4j + RabbitMQ)
 
@@ -290,8 +302,11 @@ docker compose up -d git frontend
 ### Start PSI Analysis Service (JVM Adapter)
 
 ```bash
-# macOS (first run downloads IntelliJ IDEA IU 2025.3, ~1.1 GB)
+# macOS: launches your locally installed IntelliJ IDEA 2025.3 (no extra download)
 ./run-jvm-analyzer-local.sh
+
+# Looks for /Applications/IntelliJ IDEA 2.app, then any IntelliJ IDEA.app; set IDEA_HOME for other locations
+IDEA_HOME="/Applications/IntelliJ IDEA.app" ./run-jvm-analyzer-local.sh
 ```
 
 PSI service listens on `localhost:8377`.
@@ -299,7 +314,7 @@ PSI service listens on `localhost:8377`.
 ### Start the Go Analysis Service (Go Adapter)
 
 ```bash
-./run-go-analyzer-local.sh   # requires local go >= 1.24
+./run-go-analyzer-local.sh   # requires local go >= 1.26
 
 # Custom router framework whitelist (framework profile: gin/echo/chi/gorilla-mux built in)
 OCTOPUS_GO_ROUTER_PKGS="github.com/gofiber/fiber/v2,github.com/beego/beego/v2" ./run-go-analyzer-local.sh
@@ -317,6 +332,8 @@ Go service listens on `localhost:8378` — millisecond startup, second-scale ana
 # Terminal 2: frontend dev mode
 cd octopus-frontend && npm run dev
 ```
+
+Start the other backend services (ports in §0) the same way with `./gradlew :<module>:bootRun`, or bring them all up with `./dev-start.sh`. Create the Business API Testing tables before first use (see §0).
 
 ### Trigger an Analysis
 
@@ -345,11 +362,11 @@ export OCTOPUS_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef   # required; com
 docker compose -f docker-compose.yml -f docker-compose.jvm-analyzer.yml up -d
 ```
 
-Every dependency address can be overridden: the backend reads `MYSQL_HOST` / `NEO4J_URI` / `RABBITMQ_HOST` / `REVIEW_AGENT_URL` / `RECONSTRUCT_URL`; the frontend nginx reads `REVIEW_HOST` / `SCENARIO_HOST` / `RECONSTRUCT_HOST`.
+Every dependency address can be overridden: the backend reads `MYSQL_HOST` / `NEO4J_URI` / `RABBITMQ_HOST` / `REVIEW_AGENT_URL` / `RECONSTRUCT_URL`; the frontend nginx reads `API_HOST` / `REVIEW_HOST` / `SCENARIO_HOST` / `RECONSTRUCT_HOST`.
 
 ### Continuous Integration
 
-`.github/workflows/ci.yml` runs on pushes to main and on PRs: backend unit tests (with MySQL / Neo4j service containers), Go analyzer tests, and frontend type-check / lint / unit tests / build. jvm-project-analyzer needs a ~1.1 GB IDEA download and is excluded; `psi-golden.yml` runs nightly (or manually) to check PSI extraction against the sample projects in `jvm-project-analyzer/golden/`.
+`.github/workflows/ci.yml` runs on pushes to main and on PRs: backend unit tests (with MySQL / Neo4j / RabbitMQ service containers), Go analyzer tests, and frontend type-check / lint / unit tests / build. jvm-project-analyzer needs a ~1.1 GB IDEA download and is excluded; `psi-golden.yml` runs nightly (or manually) to check PSI extraction against the sample projects in `jvm-project-analyzer/golden/`.
 
 ### Key Environment Variables
 
@@ -367,6 +384,7 @@ Every dependency address can be overridden: the backend reads `MYSQL_HOST` / `NE
 | `SCENARIO_RUNNER_URL` | `http://localhost:8086` | code-intelligence → scenario-runner base URL (starts batch regression) |
 | `OCTOPUS_DDL_AUTO` | `update` | Hibernate schema strategy; use `validate` in production and manage the schema with migration scripts |
 | `QUERY_SERVICE_URL` | `http://localhost:8080` | review-agent → code-intelligence base URL (change summary fetches chain diff) |
+| `JMETER_HOME` | empty (`data/tools/apache-jmeter-5.6.3` under `dev-start.sh`) | JMeter 5.6.3 installation used by scenario-runner; without it JMX can be compiled / downloaded but not executed |
 
 ---
 
