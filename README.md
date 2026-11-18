@@ -8,18 +8,28 @@
 
 ## 0. 快捷指引
 
-**五分钟拉起全栈**（前置见 §5；`OCTOPUS_ENCRYPTION_KEY` 需 16/24/32 字节）：
+**五分钟拉起核心链路**（分析 + 查询；前置见 §5；`OCTOPUS_ENCRYPTION_KEY` 需 16/24/32 字节）：
 
 ```bash
 docker compose -f docker-compose.infra.yml up -d    # MySQL + Neo4j + RabbitMQ
-./run-jvm-analyzer-local.sh                         # JVM 分析服务 :8377（首次启动较慢）
+./run-jvm-analyzer-local.sh                         # JVM 分析服务 :8377（需本机 IntelliJ IDEA 2025.3，首次启动较慢）
 ./run-go-analyzer-local.sh                          # Go 分析服务 :8378（秒级）
 GIT_PASSWORD=dummy OCTOPUS_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef \
   ./gradlew :code-intelligence:bootRun              # 后端 :8080
 cd octopus-frontend && npm install && npm run dev   # 前端 :3000
 ```
 
+这只启动了 code-intelligence。Code Review、变更总结、业务 API 测试还需要 review-agent（8083）、源码还原（8082）、scenario-runner（8086），用下面的一键启动最省事。
+
 **或一键启动（本地开发）**：`./dev-start.sh` 拉起基础设施、全部后端服务（8080–8086）与前端；`--no-build` 跳过构建，`--no-infra` 跳过容器，日志在 `logs/`。未设置 `OCTOPUS_ENCRYPTION_KEY` 时自动生成本地开发密钥（勿用于生产）。`./dev-stop.sh` 停止（加 `--infra` 同时停止容器）。
+
+**业务 API 测试首次使用**：scenario-runner 不自动建表（`ddl-auto: none`），需对 MySQL 执行一次建表脚本；执行用例还需要 Apache JMeter 5.6.3（`JMETER_HOME`，`dev-start.sh` 默认取 `data/tools/apache-jmeter-5.6.3`）。
+
+```bash
+# 全新库执行一次（octopus-mysql 是 docker-compose.infra.yml 的容器名）；已有库按 BUSINESS_TESTING.md 执行 db/migrations/ 下的增量脚本
+docker exec -i octopus-mysql mysql -uroot -proot octopus \
+  < octopus-scenario-runner/src/main/resources/db/business-testing.sql
+```
 
 **发起第一次分析**——打开 <http://localhost:3000> 在"分析任务"页提交本地目录，或：
 
@@ -34,14 +44,14 @@ curl -X POST http://localhost:8080/api/analysis/local \
 | 页面 | 用途 |
 |------|------|
 | `/change-summary` 变更总结 | 选入口 + 两个版本（分支/commit/tag 任意组合）→ 修改要点 + 测试要点 |
-| `/review` Code Review | Jira 工单号 / 文档 / 手动输入需求 → 结构化审查 → 底部追问 |
+| `/review` Code Review | Jira 工单号 / 文档 / 手动输入需求 → 结构化审查 → 底部追问；`/review/history` 审查历史 |
 | `/query/callgraph` 调用图查询 | 入口浏览（API 优先）、调用链 / 上下游 / 影响路径 |
 | `/query/class`、`/query/endpoints` | 类详情、入口列表 |
 | `/admin` Agent 配置 | 模型管理（API 格式 + 密钥加密存储）、Prompt、Skill、需求源（Jira） |
 | `/analysis` 分析任务 | 分析状态 / 步骤 / 重试；多分支分析后版本随时可查 |
 | `/repos` 仓库管理 | 仓库配置与 Git 同步 |
-| `/business-testing` 业务 API 测试 | 接口资产、项目背景、业务流程画布（AI 整链补全）、DSL、JMeter 扩展、批量回归 → 编译 JMX 并执行 |
-| `/background` 背景知识 | 按项目/模块/提交查询仓库背景；调度 LLM 仓库背景分析，查看任务历史 |
+| `/business-testing` 业务 API 测试 | 接口资产、项目背景、业务流程画布（AI 整链补全）→ 编译 JMX 并执行；子页面 `/dsl` DSL 工作台、`/extensions` JMeter 扩展与函数、`/regressions` 批量回归、`/repository-analysis` 仓库背景分析 |
+| `/background` 背景知识 | 按项目/模块/提交查询仓库背景（`/background/query`）；调度 LLM 仓库背景分析（`/background/analysis`），查看任务历史（`/background/tasks`） |
 | `/scenarios` 场景（旧版原型） | 早期场景编辑原型，保留兼容；新功能请用业务 API 测试 |
 
 **审查前置**：在 Agent 配置页注册至少一个 LLM 模型（Base URL / 账号 / API Key / API 格式——OpenAI 兼容或 Claude）。
@@ -137,7 +147,7 @@ Claude Code、Cursor、Codex 等 Agent 工具，以及 GitHub Code Navigation、
 | **octopus-git** | Git 操作微服务 | 8081 |
 | **octopus-code-reconstruct** | 调用路径源码还原（git blob 按行切片 + 批量坐标取源） | 8082 |
 | **octopus-review-agent** | AI Code Review（Skill 引擎/追问对话/变更总结/需求源 SPI） | 8083 |
-| **octopus-analysis-scheduler** | 定时/批量分析调度（RabbitMQ） | — |
+| **octopus-analysis-scheduler** | 定时/批量分析调度（RabbitMQ） | 8085 |
 | **octopus-scenario-runner** | 业务 API 测试：业务流程与 Test IR、编译 JMX 并调用 JMeter 执行、YAML DSL、用例生成（Planner/Observer/Operator）、仓库背景分析编排、批量回归（[BUSINESS_TESTING.md](octopus-scenario-runner/BUSINESS_TESTING.md)） | 8086 |
 | **octopus-jmeter-ext** | JMeter 扩展：数据验证（MySQL/PostgreSQL/Redis/Kafka 只读）与请求加密/签名预处理，在 JMeter 进程内执行（[README](octopus-jmeter-ext/README.md)） | — |
 | **octopus-jmeter-sdk** | JMeter 函数扩展 SDK：用 `@OctopusTool` 等注解声明元数据，打包 JAR 上传后注册为人与 LLM 可发现的工具（[README](octopus-jmeter-sdk/README.md)） | — |
@@ -256,9 +266,11 @@ Gerrit 变更审查任务可以接入批量业务回归：CI 在部署到测试�
 
 - Java 21+
 - Docker 或 Podman（Compose 兼容即可，本文以 docker 命令示意）
-- Node.js 20+
+- Node.js 20.19+ 或 22.12+（Vite 8 的要求）
 - Git
-- Go >= 1.24（仅分析 Go 项目需要）
+- Go >= 1.26（仅分析 Go 项目需要，见 `go-project-analyzer/go.mod`）
+- IntelliJ IDEA 2025.3（仅本地运行 JVM 分析服务需要；容器模式会在镜像构建时下载）
+- Apache JMeter 5.6.3（仅执行业务 API 测试需要；只编译 / 下载 JMX 不需要）
 
 ### 启动基础服务（MySQL + Neo4j + RabbitMQ）
 
@@ -288,8 +300,11 @@ docker compose up -d git frontend
 ### 启动 PSI 分析服务（JVM Adapter）
 
 ```bash
-# macOS（首次运行会下载 IntelliJ IDEA IU 2025.3，约 1.1 GB）
+# macOS：直接用本机安装的 IntelliJ IDEA 2025.3 启动（不额外下载）
 ./run-jvm-analyzer-local.sh
+
+# 默认找 /Applications/IntelliJ IDEA 2.app，其次任意 IntelliJ IDEA.app；其他位置用 IDEA_HOME 指定
+IDEA_HOME="/Applications/IntelliJ IDEA.app" ./run-jvm-analyzer-local.sh
 ```
 
 PSI 服务监听 `localhost:8377`。
@@ -297,7 +312,7 @@ PSI 服务监听 `localhost:8377`。
 ### 启动 Go 分析服务（Go Adapter）
 
 ```bash
-./run-go-analyzer-local.sh   # 需本机 go >= 1.24
+./run-go-analyzer-local.sh   # 需本机 go >= 1.26
 
 # 自定义路由框架白名单（框架画像：默认含 gin/echo/chi/gorilla-mux）
 OCTOPUS_GO_ROUTER_PKGS="github.com/gofiber/fiber/v2,github.com/beego/beego/v2" ./run-go-analyzer-local.sh
@@ -315,6 +330,8 @@ Go 服务监听 `localhost:8378`，毫秒级启动、秒级分析（go/types 类
 # 终端 2：前端开发模式
 cd octopus-frontend && npm run dev
 ```
+
+其余后端服务（端口见 §0）同样用 `./gradlew :<模块>:bootRun` 启动，或直接 `./dev-start.sh` 全部拉起。业务 API 测试首次使用前先建表，见 §0。
 
 ### 触发分析
 
@@ -343,11 +360,11 @@ export OCTOPUS_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef   # 必填，缺�
 docker compose -f docker-compose.yml -f docker-compose.jvm-analyzer.yml up -d
 ```
 
-依赖服务地址都可用环境变量覆盖：后端用 `MYSQL_HOST` / `NEO4J_URI` / `RABBITMQ_HOST` / `REVIEW_AGENT_URL` / `RECONSTRUCT_URL`，前端 nginx 用 `REVIEW_HOST` / `SCENARIO_HOST` / `RECONSTRUCT_HOST`。
+依赖服务地址都可用环境变量覆盖：后端用 `MYSQL_HOST` / `NEO4J_URI` / `RABBITMQ_HOST` / `REVIEW_AGENT_URL` / `RECONSTRUCT_URL`，前端 nginx 用 `API_HOST` / `REVIEW_HOST` / `SCENARIO_HOST` / `RECONSTRUCT_HOST`。
 
 ### 持续集成
 
-`.github/workflows/ci.yml` 在推送到 main 和提交 PR 时运行：后端单元测试（含 MySQL / Neo4j 服务容器）、Go 分析器测试、前端类型检查 / lint / 单测 / 构建。jvm-project-analyzer 需要下载约 1.1 GB 的 IDEA，不在其中；`psi-golden.yml` 每晚（或手动）用 `jvm-project-analyzer/golden/` 的样例工程校验 PSI 抽取结果。
+`.github/workflows/ci.yml` 在推送到 main 和提交 PR 时运行：后端单元测试（含 MySQL / Neo4j / RabbitMQ 服务容器）、Go 分析器测试、前端类型检查 / lint / 单测 / 构建。jvm-project-analyzer 需要下载约 1.1 GB 的 IDEA，不在其中；`psi-golden.yml` 每晚（或手动）用 `jvm-project-analyzer/golden/` 的样例工程校验 PSI 抽取结果。
 
 ### 关键环境变量
 
@@ -365,6 +382,7 @@ docker compose -f docker-compose.yml -f docker-compose.jvm-analyzer.yml up -d
 | `SCENARIO_RUNNER_URL` | `http://localhost:8086` | code-intelligence 访问 scenario-runner 的地址（发起批量回归） |
 | `OCTOPUS_DDL_AUTO` | `update` | Hibernate 建表策略；生产环境建议 `validate`，表结构由迁移脚本管理 |
 | `QUERY_SERVICE_URL` | `http://localhost:8080` | review-agent 访问 code-intelligence 的地址（变更总结取链路 diff） |
+| `JMETER_HOME` | 空（`dev-start.sh` 下为 `data/tools/apache-jmeter-5.6.3`） | scenario-runner 调用的 JMeter 5.6.3 安装目录；未设置时只能编译 / 下载 JMX，不能执行 |
 
 ---
 
